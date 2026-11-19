@@ -6,7 +6,40 @@ import com.example.domain.model.AiRecommendation
 import com.example.domain.model.HhiRiskReport
 import com.example.domain.model.MarketAsset
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import java.util.UUID
+
+enum class GeminiTaskModel(
+    val modelId: String,
+    val label: String,
+    val subtitle: String,
+    val requiresBilling: Boolean
+) {
+    GENERAL(
+        modelId = "gemini-3.8-flash",
+        label = "Gemini 3.8 Flash",
+        subtitle = "Uso geral (padrão, sem cobrança)",
+        requiresBilling = false
+    ),
+    FAST(
+        modelId = "gemini-3.5-flash-lite",
+        label = "3.5 Flash-Lite",
+        subtitle = "Respostas rápidas e econômicas",
+        requiresBilling = false
+    ),
+    DEEP_REASONING(
+        modelId = "gemini-4-argon",
+        label = "Gemini 4 Argon",
+        subtitle = "Raciocínio profundo (requer plano Blaze)",
+        requiresBilling = true
+    )
+}
+
+data class ChatTurn(
+    val senderRole: String, // "USER" or "MODEL"
+    val text: String
+)
 
 interface AiRepository {
     val isLiveGeminiEnabled: Boolean
@@ -19,6 +52,16 @@ interface AiRepository {
         horizonLabel: String = "Médio Prazo",
         focusLabel: String = "Análise Completa"
     ): AiRecommendation
+
+    fun streamChatReply(
+        role: AiAgentRole,
+        modelOption: GeminiTaskModel,
+        history: List<ChatTurn>,
+        userMessage: String,
+        focusedAsset: MarketAsset?,
+        hhiReport: HhiRiskReport,
+        includePersonalPortfolio: Boolean
+    ): Flow<String>
 }
 
 /**
@@ -27,6 +70,24 @@ interface AiRepository {
  */
 class PlaceholderAiRepository : AiRepository {
     override val isLiveGeminiEnabled: Boolean = false
+
+    override fun streamChatReply(
+        role: AiAgentRole,
+        modelOption: GeminiTaskModel,
+        history: List<ChatTurn>,
+        userMessage: String,
+        focusedAsset: MarketAsset?,
+        hhiReport: HhiRiskReport,
+        includePersonalPortfolio: Boolean
+    ): Flow<String> = flow {
+        delay(120)
+        val assetNote = focusedAsset?.let { " sobre ${it.ticker} (${it.assetClass.label})" } ?: ""
+        emit(
+            "[EXEMPLO DEMONSTRATIVO • ${role.title} • ${modelOption.label}] " +
+                "Resposta simulada$assetNote para \"$userMessage\". " +
+                "Para conversas reais ao vivo com o Gemini no Android, utilize o Firebase AI Logic habilitado."
+        )
+    }
 
     override suspend fun generateRecommendation(
         role: AiAgentRole,

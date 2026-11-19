@@ -4,10 +4,13 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.local.ChatMessageEntity
 import com.example.data.local.InvestDatabase
 import com.example.data.local.SavedAiRecommendationEntity
 import com.example.data.repository.AiRepository
+import com.example.data.repository.ChatTurn
 import com.example.data.repository.FirebaseAiRepository
+import com.example.data.repository.GeminiTaskModel
 import com.example.data.repository.MarketCatalogRepository
 import com.example.domain.model.AiAgentRole
 import com.example.domain.model.AiRecommendation
@@ -65,13 +68,26 @@ sealed interface ConsolidatedRunState {
     data class Error(val message: String) : ConsolidatedRunState
 }
 
+sealed interface AiChatUiState {
+    data object Idle : AiChatUiState
+    data class Loading(val role: AiAgentRole, val modelLabel: String) : AiChatUiState
+    data class Streaming(
+        val partialText: String,
+        val role: AiAgentRole,
+        val modelLabel: String
+    ) : AiChatUiState
+    data class Error(val message: String) : AiChatUiState
+}
+
 /**
- * ViewModel dedicado para gerenciar a interação estruturada com os agentes especializados
- * (Analista, Gestor e Auditor) via Firebase AI Logic (Gemini) e consolidar pareceres.
+ * ViewModel dedicado para gerenciar a interação estruturada e o chat multi-turno
+ * com os agentes especializados (Analista, Gestor e Auditor) via Firebase AI Logic (Gemini).
  */
 class AiAgentsViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val aiDao = InvestDatabase.getInstance(application).aiRecommendationDao()
+    private val db = InvestDatabase.getInstance(application)
+    private val aiDao = db.aiRecommendationDao()
+    private val chatDao = db.chatMessageDao()
     private val aiRepository: AiRepository = FirebaseAiRepository()
 
     val isLiveGeminiEnabled: Boolean = aiRepository.isLiveGeminiEnabled
@@ -85,7 +101,26 @@ class AiAgentsViewModel(application: Application) : AndroidViewModel(application
     private val _consolidatedRunState = MutableStateFlow<ConsolidatedRunState>(ConsolidatedRunState.Idle)
     val consolidatedRunState: StateFlow<ConsolidatedRunState> = _consolidatedRunState.asStateFlow()
 
+    private val _chatModelOption = MutableStateFlow(GeminiTaskModel.GENERAL)
+    val chatModelOption: StateFlow<GeminiTaskModel> = _chatModelOption.asStateFlow()
+
+    private val _chatDraft = MutableStateFlow("")
+    val chatDraft: StateFlow<String> = _chatDraft.asStateFlow()
+
+    private val _chatFocusedTicker = MutableStateFlow<String?>(null)
+    val chatFocusedTicker: StateFlow<String?> = _chatFocusedTicker.asStateFlow()
+
+    private val _chatUiState = MutableStateFlow<AiChatUiState>(AiChatUiState.Idle)
+    val chatUiState: StateFlow<AiChatUiState> = _chatUiState.asStateFlow()
+
     val savedHistory: StateFlow<List<SavedAiRecommendationEntity>> = aiDao.observeSaved()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = emptyList()
+        )
+
+    val chatMessages: StateFlow<List<ChatMessageEntity>> = chatDao.observeMessages()
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
@@ -122,6 +157,114 @@ class AiAgentsViewModel(application: Application) : AndroidViewModel(application
 
     fun clearConsolidatedStatus() {
         _consolidatedRunState.value = ConsolidatedRunState.Idle
+    }
+
+    fun selectChatModel(option: GeminiTaskModel) {
+        _chatModelOption.value = option
+    }
+
+    fun updateChatDraft(text: String) {
+        _chatDraft.value = text
+    }
+
+    fun selectChatFocusedTicker(ticker: String?) {
+        _chatFocusedTicker.value = ticker
+    }
+
+    fun clearChatError() {
+        if (_chatUiState.value is AiChatUiState.Error) {
+            _chatUiState.value = AiChatUiState.Idle
+        }
+    }
+
+    fun clearChatHistory() {
+        viewModelScope.launch {
+            chatDao.clearAll()
+            _chatUiState.value = AiChatUiState.Idle
+        }
+    }
+
+    fun sendChatMessage(
+        messageText: String = _chatDraft.value,
+        focusedAsset: MarketAsset?,
+        hhiReport: HhiRiskReport,
+        includePersonalPortfolio: Boolean
+    ) {
+        val trimmed = messageText.trim()
+        if (trimmed.isEmpty()) return
+        if (_chatUiState.value is AiChatUiState.Loading || _chatUiState.value is AiChatUiState.Streaming) {
+            return
+        }
+
+        val activeRole = _promptInput.value.selectedRole
+        val modelOption = _chatModelOption.value
+        val historySnapshot = chatMessages.value.map {
+            ChatTurn(senderRole = it.senderRole, text = it.content)
+        }
+
+        _chatDraft.value = ""
+        viewModelScope.launch {
+            _chatUiState.value = AiChatUiState.Loading(activeRole, modelOption.label)
+            try {
+                chatDao.insert(
+                    ChatMessageEntity(
+                        senderRole = "USER",
+                        agentRole = activeRole.name,
+                        modelName = modelOption.modelId,
+                        content = trimmed,
+                        usedPersonalData = includePersonalPortfolio
+                    )
+                )
+
+                val accumulated = StringBuilder()
+                withTimeout(60_000L) {
+                    aiRepository.streamChatReply(
+                        role = activeRole,
+                        modelOption = modelOption,
+                        history = historySnapshot,
+                        userMessage = trimmed,
+                        focusedAsset = focusedAsset,
+                        hhiReport = hhiReport,
+                        includePersonalPortfolio = includePersonalPortfolio
+                    ).collect { chunk ->
+                        accumulated.append(chunk)
+                        _chatUiState.value = AiChatUiState.Streaming(
+                            partialText = accumulated.toString(),
+                            role = activeRole,
+                            modelLabel = modelOption.label
+                        )
+                    }
+                }
+
+                val finalReply = accumulated.toString().trim()
+                if (finalReply.isEmpty()) {
+                    _chatUiState.value = AiChatUiState.Error("O modelo Gemini retornou uma resposta vazia.")
+                } else {
+                    chatDao.insert(
+                        ChatMessageEntity(
+                            senderRole = "MODEL",
+                            agentRole = activeRole.name,
+                            modelName = modelOption.modelId,
+                            content = finalReply,
+                            usedPersonalData = includePersonalPortfolio
+                        )
+                    )
+                    _chatUiState.value = AiChatUiState.Idle
+                }
+            } catch (e: TimeoutCancellationException) {
+                Log.e(TAG, "Gemini multi-turn chat timed out", e)
+                _chatUiState.value = AiChatUiState.Error(
+                    "Tempo limite de 60s atingido na resposta do chat. Tente novamente."
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Gemini multi-turn chat failed", e)
+                _chatUiState.value = AiChatUiState.Error(
+                    e.localizedMessage ?: "Falha ao conversar com o Gemini."
+                )
+            }
+        }
     }
 
     fun buildStructuredPromptPreview(

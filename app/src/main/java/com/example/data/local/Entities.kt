@@ -96,3 +96,15 @@ data class SavedAiRecommendationEntity(
     val scenariosSummary: String = "",
     val isDemoPlaceholder: Boolean = false
 )
+
+@Entity(tableName = "ai_chat_messages")
+data class ChatMessageEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val senderRole: String, // "USER" or "MODEL"
+    val agentRole: String, // AiAgentRole.name
+    val modelName: String,
+    val content: String,
+    val usedPersonalData: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis()
+)
+

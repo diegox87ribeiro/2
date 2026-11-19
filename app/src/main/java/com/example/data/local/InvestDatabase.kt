@@ -15,9 +15,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         StrategyCriteriaEntity::class,
         StrategyChangeLogEntity::class,
         CryptoVirtualPositionEntity::class,
-        SavedAiRecommendationEntity::class
+        SavedAiRecommendationEntity::class,
+        ChatMessageEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class InvestDatabase : RoomDatabase() {
@@ -25,6 +26,7 @@ abstract class InvestDatabase : RoomDatabase() {
     abstract fun strategyDao(): StrategyDao
     abstract fun cryptoVirtualDao(): CryptoVirtualDao
     abstract fun aiRecommendationDao(): AiRecommendationDao
+    abstract fun chatMessageDao(): ChatMessageDao
 
     companion object {
         @Volatile
@@ -41,6 +43,24 @@ abstract class InvestDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS ai_chat_messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        senderRole TEXT NOT NULL,
+                        agentRole TEXT NOT NULL,
+                        modelName TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        usedPersonalData INTEGER NOT NULL DEFAULT 0,
+                        createdAt INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getInstance(context: Context): InvestDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -48,7 +68,8 @@ abstract class InvestDatabase : RoomDatabase() {
                     InvestDatabase::class.java,
                     "invest_ai_local.db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                 INSTANCE = instance
                 instance

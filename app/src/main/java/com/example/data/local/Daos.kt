@@ -90,3 +90,16 @@ interface AiRecommendationDao {
     @Insert
     suspend fun insert(item: SavedAiRecommendationEntity)
 }
+
+@Dao
+interface ChatMessageDao {
+    @Query("SELECT * FROM ai_chat_messages ORDER BY createdAt ASC, id ASC")
+    fun observeMessages(): Flow<List<ChatMessageEntity>>
+
+    @Insert
+    suspend fun insert(message: ChatMessageEntity): Long
+
+    @Query("DELETE FROM ai_chat_messages")
+    suspend fun clearAll()
+}
+

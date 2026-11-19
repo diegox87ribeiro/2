@@ -139,8 +139,16 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         viewModelScope.launch {
-            repository.ensureInitialDefaults()
-            repository.initDefaultCryptoWalletIfEmpty(dashboardState.value.cryptoVirtualPositions)
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    repository.ensureInitialDefaults()
+                    repository.initDefaultCryptoWalletIfEmpty(dashboardState.value.cryptoVirtualPositions)
+                }
+            }.onFailure { err ->
+                if (err is CancellationException) throw err
+                Log.e("InvestViewModel", "Falha ao inicializar dados locais padrão", err)
+                _statusBannerMessage.value = "Aviso de banco local: ${err.localizedMessage ?: "falha na inicialização"}"
+            }
         }
     }
 

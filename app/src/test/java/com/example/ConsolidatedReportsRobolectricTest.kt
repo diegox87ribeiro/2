@@ -45,6 +45,11 @@ class ConsolidatedReportsRobolectricTest {
 
         composeRule.onNodeWithTag("bottom_nav_oportunidades_ia").performClick()
         composeRule.onNodeWithTag("ai_consent_switch").assertIsDisplayed()
+        composeRule.onNodeWithTag("ai_mode_chat_tab").assertIsDisplayed()
+        composeRule.onNodeWithTag("chat_message_input").assertExists()
+        composeRule.onNodeWithTag("send_chat_message_button").assertExists()
+        composeRule.onNodeWithTag("ai_mode_structured_tab").performClick()
+        composeRule.onNodeWithTag("run_ai_agent_button").assertExists()
 
         composeRule.onNodeWithTag("open_drawer_button").performClick()
         composeRule.onNodeWithTag("drawer_item_relatorios_gerenciais").performScrollTo().performClick()

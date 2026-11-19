@@ -26,25 +26,32 @@ sealed interface CloudReportsUiState {
 }
 
 class CloudSyncViewModel(
-    private val repository: FirestoreSyncRepository,
-    private val currentUserId: String
+    private val repository: FirestoreSyncRepository?,
+    private val currentUserId: String,
+    private val initError: String? = null
 ) : ViewModel() {
 
-    val cloudReports: StateFlow<CloudReportsUiState> = repository.observeConsolidatedReports(currentUserId)
-        .map<List<CloudConsolidatedReport>, CloudReportsUiState> { CloudReportsUiState.Success(it) }
-        .catch { error ->
-            val firestoreError = generateSequence(error) { it.cause }
-                .filterIsInstance<FirebaseFirestoreException>()
-                .firstOrNull()
-            if (firestoreError == null && error is CancellationException) throw error
-            val rootError = firestoreError ?: error
-            emit(CloudReportsUiState.Error(rootError.message ?: "Falha ao sincronizar relatórios na nuvem"))
-        }
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5_000L),
-            initialValue = CloudReportsUiState.Loading
-        )
+    val cloudReports: StateFlow<CloudReportsUiState> = if (repository == null) {
+        MutableStateFlow(
+            CloudReportsUiState.Error(initError ?: "Firestore indisponível neste dispositivo.")
+        ).asStateFlow()
+    } else {
+        repository.observeConsolidatedReports(currentUserId)
+            .map<List<CloudConsolidatedReport>, CloudReportsUiState> { CloudReportsUiState.Success(it) }
+            .catch { error ->
+                val firestoreError = generateSequence(error) { it.cause }
+                    .filterIsInstance<FirebaseFirestoreException>()
+                    .firstOrNull()
+                if (firestoreError == null && error is CancellationException) throw error
+                val rootError = firestoreError ?: error
+                emit(CloudReportsUiState.Error(rootError.message ?: "Falha ao sincronizar relatórios na nuvem"))
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000L),
+                initialValue = CloudReportsUiState.Loading
+            )
+    }
 
     private val _syncMessage = MutableStateFlow<String?>(null)
     val syncMessage: StateFlow<String?> = _syncMessage.asStateFlow()
@@ -62,14 +69,19 @@ class CloudSyncViewModel(
         latestImport: ImportHistoryEntity?,
         positionsCount: Int
     ) {
+        val activeRepo = repository
+        if (activeRepo == null) {
+            _syncMessage.value = initError ?: "Firestore indisponível para sincronização."
+            return
+        }
         viewModelScope.launch {
             _isSyncing.value = true
             val insights = listOfNotNull(report.analystInsight, report.gestorInsight, report.auditorInsight)
             insights.forEach { entity: SavedAiRecommendationEntity ->
-                repository.syncAgentInsight(entity)
+                activeRepo.syncAgentInsight(entity)
             }
-            val reportRes = repository.saveConsolidatedReport(report, hhiReport)
-            repository.syncPortfolioSnapshot(latestImport, hhiReport, positionsCount)
+            val reportRes = activeRepo.saveConsolidatedReport(report, hhiReport)
+            activeRepo.syncPortfolioSnapshot(latestImport, hhiReport, positionsCount)
             _isSyncing.value = false
             _syncMessage.value = reportRes.fold(
                 onSuccess = { "Relatório consolidado e pareceres salvos no Firebase Firestore." },

@@ -31,4 +31,15 @@ class ExampleRobolectricTest {
         composeRule.onNodeWithText("INVEST AI").assertIsDisplayed()
         composeRule.onNodeWithTag("google_sign_in_button").assertIsDisplayed()
     }
+
+    @Test
+    fun `crash reporter stores and consumes last crash trace synchronously`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = context.getSharedPreferences("invest_ai_crash_diag", Context.MODE_PRIVATE)
+        prefs.edit().putString("last_crash_trace", "java.lang.IllegalStateException: Test crash").commit()
+
+        val consumed = CrashReporter.consumeLastCrash(context)
+        assertEquals("java.lang.IllegalStateException: Test crash", consumed)
+        assertEquals(null, CrashReporter.consumeLastCrash(context))
+    }
 }

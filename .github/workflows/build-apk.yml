@@ -80,10 +80,15 @@ jobs:
             -keypass android |
             grep -E "SHA1:|SHA256:" || true
 
-      - name: Gerar APK de Debug
+      - name: Verificar configuração Firebase e gerar APK de Debug
         shell: bash
         run: |
           set -euo pipefail
+          if [ -s app/google-services.json ]; then
+            echo "OK: app/google-services.json encontrado no repositório."
+          else
+            echo "AVISO: app/google-services.json ausente no repositório; o APK abrirá em Modo Local sem Firebase/Login Google."
+          fi
           gradle :app:assembleDebug --no-daemon --stacktrace
 
       - name: Disponibilizar APK para download

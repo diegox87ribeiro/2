@@ -2,6 +2,8 @@ package com.example
 
 import com.example.data.importexport.SpreadsheetImporter
 import com.example.data.local.SavedAiRecommendationEntity
+import com.example.data.repository.ChatTurn
+import com.example.data.repository.GeminiTaskModel
 import com.example.data.repository.MarketCatalogRepository
 import com.example.data.repository.PlaceholderAiRepository
 import com.example.data.repository.ReportExporter
@@ -13,6 +15,8 @@ import com.example.domain.model.DataComGroup
 import com.example.domain.model.HhiRiskReport
 import com.example.domain.model.PortfolioItemView
 import com.example.domain.model.PortfolioType
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -367,5 +371,34 @@ class InvestAiCoreTests {
         assertTrue(exportedTxt.contains("Agente Gestor [HGLG11]"))
         assertTrue(exportedTxt.contains("Agente Auditor [HGLG11]"))
     }
+
+    @Test
+    fun `multi-turn chat repository streams reply with role, model tier, and conversation history`() = runBlocking {
+        val repo = PlaceholderAiRepository()
+        val asset = MarketCatalogRepository.catalogAssets.first()
+        val hhi = HhiRiskReport.calculate(emptyList(), cashBrl = 1000.0)
+        val history = listOf(
+            ChatTurn(senderRole = "USER", text = "Qual é o foco do Analista?"),
+            ChatTurn(senderRole = "MODEL", text = "Fundamentos, múltiplos e técnica.")
+        )
+
+        val reply = repo.streamChatReply(
+            role = AiAgentRole.GESTOR,
+            modelOption = GeminiTaskModel.FAST,
+            history = history,
+            userMessage = "Como equilibrar G1–G4?",
+            focusedAsset = asset,
+            hhiReport = hhi,
+            includePersonalPortfolio = false
+        ).first()
+
+        assertTrue(reply.contains("Gestor"))
+        assertTrue(reply.contains(GeminiTaskModel.FAST.label))
+        assertTrue(reply.contains(asset.ticker))
+        assertEquals("gemini-3.8-flash", GeminiTaskModel.GENERAL.modelId)
+        assertEquals("gemini-3.5-flash-lite", GeminiTaskModel.FAST.modelId)
+        assertEquals("gemini-4-argon", GeminiTaskModel.DEEP_REASONING.modelId)
+    }
 }
+
 

@@ -6,16 +6,20 @@ import com.example.domain.model.AiRecommendation
 import com.example.domain.model.HhiRiskReport
 import com.example.domain.model.MarketAsset
 import com.google.firebase.Firebase
+import com.google.firebase.ai.GenerativeModel
 import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.Schema
 import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import org.json.JSONObject
 import java.util.UUID
 
 /**
- * Implementação oficial usando Firebase AI Logic (`Firebase.ai`) com modelo `gemini-3.8-flash`
- * e saída estruturada via `responseSchema` (Schema.obj).
+ * Implementação oficial usando Firebase AI Logic (`Firebase.ai`) com suporte a:
+ * 1. Pareceres estruturados em JSON (`gemini-3.8-flash` + `responseSchema`).
+ * 2. Chat multi-turno com streaming (`startChat` + `sendMessageStream`) e seleção de modelo por tarefa.
  * Respeita integralmente o consentimento explícito antes de incluir dados da carteira pessoal.
  */
 class FirebaseAiRepository : AiRepository {
@@ -51,24 +55,105 @@ class FirebaseAiRepository : AiRepository {
         )
     )
 
+    private val baseSystemInstruction = content {
+        text(
+            "Você é um assistente especialista da plataforma INVEST AI (Brasil), atuando conforme o papel solicitado " +
+                "(Analista, Gestor ou Auditor). Priorize B3, CVM, Banco Central, ANBIMA e Relações com Investidores (RI). " +
+                "Nunca invente cotações, posições, datas-base ou fontes; quando um ativo usar dados demonstrativos, " +
+                "deixe isso explícito. Nunca execute ordens financeiras, nunca peça senhas bancárias e só considere " +
+                "métricas pessoais se explicitamente autorizadas na mensagem. Responda exclusivamente em português do Brasil."
+        )
+    }
+
     private val model by lazy {
         Firebase.ai.generativeModel(
-            modelName = "gemini-3.8-flash",
+            modelName = GeminiTaskModel.GENERAL.modelId,
             generationConfig = generationConfig {
                 responseMimeType = "application/json"
                 responseSchema = recommendationSchema
                 temperature = 0.25f
             },
-            systemInstruction = content {
-                text(
-                    "Você é um agente especializado da plataforma INVEST AI (Brasil). " +
-                        "Priorize B3, CVM, Banco Central, ANBIMA e Relações com Investidores (RI). " +
-                        "Nunca invente posições, preços ou fatos; quando o dado de entrada for demonstrativo, " +
-                        "deixe isso explícito em 'dadosUtilizados' e 'fonteConsultada'. " +
-                        "Nunca execute ordens financeiras nem solicite senhas. Responda exclusivamente em português brasileiro."
-                )
-            }
+            systemInstruction = baseSystemInstruction
         )
+    }
+
+    private val generalChatModel: GenerativeModel by lazy {
+        Firebase.ai.generativeModel(
+            modelName = GeminiTaskModel.GENERAL.modelId,
+            generationConfig = generationConfig { temperature = 0.35f },
+            systemInstruction = baseSystemInstruction
+        )
+    }
+
+    private val fastChatModel: GenerativeModel by lazy {
+        Firebase.ai.generativeModel(
+            modelName = GeminiTaskModel.FAST.modelId,
+            generationConfig = generationConfig { temperature = 0.3f },
+            systemInstruction = baseSystemInstruction
+        )
+    }
+
+    private val deepChatModel: GenerativeModel by lazy {
+        Firebase.ai.generativeModel(
+            modelName = GeminiTaskModel.DEEP_REASONING.modelId,
+            generationConfig = generationConfig { temperature = 0.25f },
+            systemInstruction = baseSystemInstruction
+        )
+    }
+
+    override fun streamChatReply(
+        role: AiAgentRole,
+        modelOption: GeminiTaskModel,
+        history: List<ChatTurn>,
+        userMessage: String,
+        focusedAsset: MarketAsset?,
+        hhiReport: HhiRiskReport,
+        includePersonalPortfolio: Boolean
+    ): Flow<String> = flow {
+        val activeModel = when (modelOption) {
+            GeminiTaskModel.GENERAL -> generalChatModel
+            GeminiTaskModel.FAST -> fastChatModel
+            GeminiTaskModel.DEEP_REASONING -> deepChatModel
+        }
+
+        val roleInstruction = when (role) {
+            AiAgentRole.ANALISTA ->
+                "Papel ativo: ANALISTA (avaliação fundamentalista, técnica, múltiplos P/VP, DY, P/L, ROE e consistência de proventos)."
+            AiAgentRole.GESTOR ->
+                "Papel ativo: GESTOR (alocação de carteira, diversificação setorial, liquidez, grupo Data-Com G1–G4 e risco HHI)."
+            AiAgentRole.AUDITOR ->
+                "Papel ativo: AUDITOR (verificação crítica de consistência de dados, cálculos, fontes CVM/B3/BCB/ANBIMA/RI e riscos)."
+        }
+
+        val assetContext = focusedAsset?.let { asset ->
+            "\nAtivo em foco (${if (asset.isDemoData) "BASE DEMONSTRATIVA" else "BASE IMPORTADA"}): " +
+                "${asset.ticker} - ${asset.name} (${asset.assetClass.label}, setor ${asset.sector}), " +
+                "Preço R$ ${"%.2f".format(asset.price)}, DY ${"%.2f".format(asset.dy12m)}%, " +
+                "P/VP ${"%.2f".format(asset.pvp)}x, Liquidez R$ ${"%.1f".format(asset.liquidezDiariaMilhoes)}M, " +
+                "Base ${asset.dataBaseDate}, Fonte ${asset.sourceLabel}."
+        }.orEmpty()
+
+        val privacyContext = if (includePersonalPortfolio && hhiReport.totalInvestedBrl > 0) {
+            "\nContexto pessoal autorizado: Patrimônio R$ ${"%.2f".format(hhiReport.totalEquityBrl)}, " +
+                "Caixa R$ ${"%.2f".format(hhiReport.cashBrl)}, HHI ${hhiReport.hhiScore.toInt()} pts (${hhiReport.classification})."
+        } else {
+            "\nDados pessoais da carteira: ISOLADOS LOCALMENTE (não inferir posições pessoais)."
+        }
+
+        val firebaseHistory = history.takeLast(20).map { turn ->
+            val roleKey = if (turn.senderRole.equals("USER", ignoreCase = true)) "user" else "model"
+            content(roleKey) { text(turn.text) }
+        }
+
+        val chat = activeModel.startChat(history = firebaseHistory)
+        val composedPrompt = "$roleInstruction$assetContext$privacyContext\n\nMensagem do investidor: $userMessage"
+
+        chat.sendMessageStream(composedPrompt).collect { chunk ->
+            val delta = chunk.text.orEmpty()
+            if (delta.isNotEmpty()) {
+                emit(delta)
+            }
+        }
     }
 
     override suspend fun generateRecommendation(

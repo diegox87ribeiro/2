@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.Button
@@ -24,11 +25,17 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -44,6 +51,7 @@ import com.example.ui.components.FintechCard
 import com.example.ui.theme.AmberGold
 import com.example.ui.theme.CoralRed
 import com.example.ui.theme.ElectricCyan
+import com.example.ui.theme.EmeraldContainer
 import com.example.ui.theme.EmeraldOnPrimary
 import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.JetBrainsMonoFamily
@@ -64,20 +72,28 @@ fun AiAgentsScreen(
     val promptInput by aiAgentsViewModel.promptInput.collectAsStateWithLifecycle()
     val aiUiState by aiAgentsViewModel.uiState.collectAsStateWithLifecycle()
     val savedHistory by aiAgentsViewModel.savedHistory.collectAsStateWithLifecycle()
+    val chatMessages by aiAgentsViewModel.chatMessages.collectAsStateWithLifecycle()
+    val chatUiState by aiAgentsViewModel.chatUiState.collectAsStateWithLifecycle()
+    val chatModelOption by aiAgentsViewModel.chatModelOption.collectAsStateWithLifecycle()
+    val chatDraft by aiAgentsViewModel.chatDraft.collectAsStateWithLifecycle()
+    val chatFocusedTicker by aiAgentsViewModel.chatFocusedTicker.collectAsStateWithLifecycle()
+
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) } // 0 = Chat Multi-Turno, 1 = Prompt Estruturado
 
     val selectedAsset = state.marketAssets.firstOrNull { it.ticker == promptInput.selectedTicker }
         ?: state.marketAssets.first()
+    val chatAsset = chatFocusedTicker?.let { ticker -> state.marketAssets.firstOrNull { it.ticker == ticker } }
     val consentGranted = state.preferences.aiPortfolioConsentGranted
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().testTag("ai_agents_lazy_column"),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
             if (aiAgentsViewModel.isLiveGeminiEnabled) {
                 DataDisclaimerBanner(
-                    text = "Gemini 3.8 Flash conectado via Firebase AI Logic + App Check. Prompts estruturados retornam JSON validado; dados pessoais da carteira permanecem isolados até autorização explícita.",
+                    text = "Gemini conectado via Firebase AI Logic + App Check (chat multi-turno com streaming e pareceres JSON). Dados pessoais da carteira permanecem isolados até autorização explícita.",
                     isWarning = false
                 )
             } else {
@@ -123,166 +139,225 @@ fun AiAgentsScreen(
         }
 
         item {
-            FintechCard {
-                Text("Construtor de Prompt Estruturado", style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(8.dp))
-
-                Text("1. Agente Especializado", style = MaterialTheme.typography.labelLarge, color = ElectricCyan)
-                Spacer(Modifier.height(4.dp))
-                FilterChipBar(
-                    options = AiAgentRole.entries.map { it to it.title },
-                    selected = promptInput.selectedRole,
-                    onSelect = aiAgentsViewModel::selectRole
-                )
-                Text(promptInput.selectedRole.subtitle, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
-
-                Spacer(Modifier.height(10.dp))
-                Text("2. Ativo Alvo", style = MaterialTheme.typography.labelLarge, color = ElectricCyan)
-                Spacer(Modifier.height(4.dp))
-                FilterChipBar(
-                    options = state.marketAssets.take(10).map { it.ticker to it.ticker },
-                    selected = promptInput.selectedTicker,
-                    onSelect = aiAgentsViewModel::selectTicker
-                )
-
-                Spacer(Modifier.height(10.dp))
-                Text("3. Horizonte da Análise", style = MaterialTheme.typography.labelLarge, color = ElectricCyan)
-                Spacer(Modifier.height(4.dp))
-                FilterChipBar(
-                    options = AnalysisHorizon.entries.map { it to it.label },
-                    selected = promptInput.horizon,
-                    onSelect = aiAgentsViewModel::selectHorizon
-                )
-
-                Spacer(Modifier.height(10.dp))
-                Text("4. Foco Estruturado", style = MaterialTheme.typography.labelLarge, color = ElectricCyan)
-                Spacer(Modifier.height(4.dp))
-                FilterChipBar(
-                    options = AnalysisFocus.entries.map { it to it.label },
-                    selected = promptInput.focus,
-                    onSelect = aiAgentsViewModel::selectFocus
-                )
-
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = promptInput.customQuestion,
-                    onValueChange = aiAgentsViewModel::updateCustomQuestion,
-                    label = { Text("5. Pergunta ou critério específico (opcional)") },
-                    modifier = Modifier.fillMaxWidth().testTag("ai_custom_question_input")
-                )
-
-                Spacer(Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                SegmentedButton(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    icon = { Icon(Icons.Default.Chat, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                    colors = SegmentedButtonDefaults.colors(
+                        activeContainerColor = EmeraldContainer,
+                        activeContentColor = EmeraldPrimary
+                    ),
+                    modifier = Modifier.testTag("ai_mode_chat_tab")
                 ) {
-                    TextButton(
-                        onClick = aiAgentsViewModel::togglePromptPreview,
-                        modifier = Modifier.testTag("toggle_prompt_preview_button")
-                    ) {
-                        Icon(Icons.Default.Code, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(if (promptInput.showPromptPreview) "Ocultar Prompt Estruturado" else "Visualizar Prompt Estruturado")
-                    }
-                    if (aiUiState !is AiAgentUiState.Idle) {
-                        TextButton(onClick = aiAgentsViewModel::resetResult) {
-                            Text("Limpar Resultado")
-                        }
-                    }
+                    Text("Chat Multi-Turno")
                 }
-
-                AnimatedVisibility(visible = promptInput.showPromptPreview) {
-                    FintechCard(borderColor = ElectricCyan.copy(alpha = 0.35f)) {
-                        Text(
-                            text = aiAgentsViewModel.buildStructuredPromptPreview(
-                                asset = selectedAsset,
-                                hhiReport = state.realHhi,
-                                includePersonalPortfolio = consentGranted
-                            ),
-                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
-                            color = TextSecondary
-                        )
-                    }
+                SegmentedButton(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    icon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                    colors = SegmentedButtonDefaults.colors(
+                        activeContainerColor = EmeraldContainer,
+                        activeContentColor = EmeraldPrimary
+                    ),
+                    modifier = Modifier.testTag("ai_mode_structured_tab")
+                ) {
+                    Text("Prompt Estruturado")
                 }
+            }
+        }
 
-                Spacer(Modifier.height(10.dp))
-                Button(
-                    onClick = {
-                        aiAgentsViewModel.submitStructuredAnalysis(
-                            asset = selectedAsset,
+        if (selectedTab == 0) {
+            item {
+                MultiTurnGeminiChatPanel(
+                    selectedRole = promptInput.selectedRole,
+                    onSelectRole = aiAgentsViewModel::selectRole,
+                    selectedModel = chatModelOption,
+                    onSelectModel = aiAgentsViewModel::selectChatModel,
+                    focusedTicker = chatFocusedTicker,
+                    availableAssets = state.marketAssets,
+                    onSelectFocusedTicker = aiAgentsViewModel::selectChatFocusedTicker,
+                    messages = chatMessages,
+                    chatUiState = chatUiState,
+                    draft = chatDraft,
+                    onDraftChange = aiAgentsViewModel::updateChatDraft,
+                    onSendMessage = { text ->
+                        aiAgentsViewModel.sendChatMessage(
+                            messageText = text,
+                            focusedAsset = chatAsset,
                             hhiReport = state.realHhi,
                             includePersonalPortfolio = consentGranted
                         )
                     },
-                    enabled = aiUiState !is AiAgentUiState.Loading,
-                    modifier = Modifier.fillMaxWidth().testTag("run_ai_agent_button"),
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary, contentColor = EmeraldOnPrimary)
-                ) {
-                    Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Enviar Prompt ao ${promptInput.selectedRole.title} (${selectedAsset.ticker})")
-                }
+                    onClearHistory = aiAgentsViewModel::clearChatHistory,
+                    onDismissError = aiAgentsViewModel::clearChatError
+                )
             }
-        }
-
-        when (val ui = aiUiState) {
-            is AiAgentUiState.Idle -> {
-                item {
-                    FintechCard {
-                        Text(
-                            "Configure o agente, ativo, horizonte e foco acima e toque em Enviar Prompt para receber o parecer estruturado do Gemini.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = TextSecondary
-                        )
-                    }
-                }
-            }
-            is AiAgentUiState.Loading -> {
-                item {
-                    FintechCard {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(modifier = Modifier.size(22.dp), color = EmeraldPrimary)
-                            Spacer(Modifier.width(12.dp))
-                            Text("Consultando Gemini 3.8 Flash e validando esquema JSON...", style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                }
-            }
-            is AiAgentUiState.Error -> {
-                item {
-                    FintechCard(borderColor = CoralRed) {
-                        Text("Falha na Consulta ao Agente Gemini", style = MaterialTheme.typography.titleSmall, color = CoralRed)
-                        Spacer(Modifier.height(4.dp))
-                        Text(ui.message, style = MaterialTheme.typography.bodySmall)
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedButton(onClick = {
-                            aiAgentsViewModel.submitStructuredAnalysis(selectedAsset, state.realHhi, consentGranted)
-                        }) {
-                            Text("Tentar Novamente")
-                        }
-                    }
-                }
-            }
-            is AiAgentUiState.Success -> {
-                item {
-                    RecommendationStructuredCard(rec = ui.recommendation)
-                }
-            }
-        }
-
-        if (savedHistory.isNotEmpty()) {
+        } else {
             item {
                 FintechCard {
-                    Text("Histórico Recente de Pareceres", style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(6.dp))
-                    savedHistory.take(5).forEach { saved ->
-                        Text(
-                            "• ${saved.ticker} (${saved.agentRole}) -> ${saved.conclusion} • Confiança ${saved.confidence}%",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextSecondary,
-                            modifier = Modifier.padding(vertical = 2.dp)
-                        )
+                    Text("Construtor de Prompt Estruturado", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+
+                    Text("1. Agente Especializado", style = MaterialTheme.typography.labelLarge, color = ElectricCyan)
+                    Spacer(Modifier.height(4.dp))
+                    FilterChipBar(
+                        options = AiAgentRole.entries.map { it to it.title },
+                        selected = promptInput.selectedRole,
+                        onSelect = aiAgentsViewModel::selectRole
+                    )
+                    Text(promptInput.selectedRole.subtitle, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+
+                    Spacer(Modifier.height(10.dp))
+                    Text("2. Ativo Alvo", style = MaterialTheme.typography.labelLarge, color = ElectricCyan)
+                    Spacer(Modifier.height(4.dp))
+                    FilterChipBar(
+                        options = state.marketAssets.take(10).map { it.ticker to it.ticker },
+                        selected = promptInput.selectedTicker,
+                        onSelect = aiAgentsViewModel::selectTicker
+                    )
+
+                    Spacer(Modifier.height(10.dp))
+                    Text("3. Horizonte da Análise", style = MaterialTheme.typography.labelLarge, color = ElectricCyan)
+                    Spacer(Modifier.height(4.dp))
+                    FilterChipBar(
+                        options = AnalysisHorizon.entries.map { it to it.label },
+                        selected = promptInput.horizon,
+                        onSelect = aiAgentsViewModel::selectHorizon
+                    )
+
+                    Spacer(Modifier.height(10.dp))
+                    Text("4. Foco Estruturado", style = MaterialTheme.typography.labelLarge, color = ElectricCyan)
+                    Spacer(Modifier.height(4.dp))
+                    FilterChipBar(
+                        options = AnalysisFocus.entries.map { it to it.label },
+                        selected = promptInput.focus,
+                        onSelect = aiAgentsViewModel::selectFocus
+                    )
+
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = promptInput.customQuestion,
+                        onValueChange = aiAgentsViewModel::updateCustomQuestion,
+                        label = { Text("5. Pergunta ou critério específico (opcional)") },
+                        modifier = Modifier.fillMaxWidth().testTag("ai_custom_question_input")
+                    )
+
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(
+                            onClick = aiAgentsViewModel::togglePromptPreview,
+                            modifier = Modifier.testTag("toggle_prompt_preview_button")
+                        ) {
+                            Icon(Icons.Default.Code, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (promptInput.showPromptPreview) "Ocultar Prompt Estruturado" else "Visualizar Prompt Estruturado")
+                        }
+                        if (aiUiState !is AiAgentUiState.Idle) {
+                            TextButton(onClick = aiAgentsViewModel::resetResult) {
+                                Text("Limpar Resultado")
+                            }
+                        }
+                    }
+
+                    AnimatedVisibility(visible = promptInput.showPromptPreview) {
+                        FintechCard(borderColor = ElectricCyan.copy(alpha = 0.35f)) {
+                            Text(
+                                text = aiAgentsViewModel.buildStructuredPromptPreview(
+                                    asset = selectedAsset,
+                                    hhiReport = state.realHhi,
+                                    includePersonalPortfolio = consentGranted
+                                ),
+                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
+                                color = TextSecondary
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+                    Button(
+                        onClick = {
+                            aiAgentsViewModel.submitStructuredAnalysis(
+                                asset = selectedAsset,
+                                hhiReport = state.realHhi,
+                                includePersonalPortfolio = consentGranted
+                            )
+                        },
+                        enabled = aiUiState !is AiAgentUiState.Loading,
+                        modifier = Modifier.fillMaxWidth().testTag("run_ai_agent_button"),
+                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary, contentColor = EmeraldOnPrimary)
+                    ) {
+                        Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Enviar Prompt ao ${promptInput.selectedRole.title} (${selectedAsset.ticker})")
+                    }
+                }
+            }
+
+            when (val ui = aiUiState) {
+                is AiAgentUiState.Idle -> {
+                    item {
+                        FintechCard {
+                            Text(
+                                "Configure o agente, ativo, horizonte e foco acima e toque em Enviar Prompt para receber o parecer estruturado do Gemini.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextSecondary
+                            )
+                        }
+                    }
+                }
+                is AiAgentUiState.Loading -> {
+                    item {
+                        FintechCard {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(modifier = Modifier.size(22.dp), color = EmeraldPrimary)
+                                Spacer(Modifier.width(12.dp))
+                                Text("Consultando Gemini 3.8 Flash e validando esquema JSON...", style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    }
+                }
+                is AiAgentUiState.Error -> {
+                    item {
+                        FintechCard(borderColor = CoralRed) {
+                            Text("Falha na Consulta ao Agente Gemini", style = MaterialTheme.typography.titleSmall, color = CoralRed)
+                            Spacer(Modifier.height(4.dp))
+                            Text(ui.message, style = MaterialTheme.typography.bodySmall)
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedButton(onClick = {
+                                aiAgentsViewModel.submitStructuredAnalysis(selectedAsset, state.realHhi, consentGranted)
+                            }) {
+                                Text("Tentar Novamente")
+                            }
+                        }
+                    }
+                }
+                is AiAgentUiState.Success -> {
+                    item {
+                        RecommendationStructuredCard(rec = ui.recommendation)
+                    }
+                }
+            }
+
+            if (savedHistory.isNotEmpty()) {
+                item {
+                    FintechCard {
+                        Text("Histórico Recente de Pareceres", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(6.dp))
+                        savedHistory.take(5).forEach { saved ->
+                            Text(
+                                "• ${saved.ticker} (${saved.agentRole}) -> ${saved.conclusion} • Confiança ${saved.confidence}%",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary,
+                                modifier = Modifier.padding(vertical = 2.dp)
+                            )
+                        }
                     }
                 }
             }
