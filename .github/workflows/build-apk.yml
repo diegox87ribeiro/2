@@ -25,19 +25,20 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      # O runner ubuntu-latest já inclui o Android SDK. Evitamos setup-android,
-      # que falha ao tentar instalar o pacote obsoleto "tools".
+      # O runner ubuntu-latest já inclui o Android SDK.
       - name: Instalar componentes Android necessários
         shell: bash
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
         run: |
           set -euo pipefail
+
           SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager -print -quit)"
           if [ -z "$SDKMANAGER" ]; then
             echo "sdkmanager não encontrado em $ANDROID_HOME/cmdline-tools" >&2
             exit 1
           fi
+
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" \
             "platform-tools" \
@@ -47,11 +48,14 @@ jobs:
       - name: Configurar Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
+          gradle-version: "9.3.1"
           cache-read-only: false
 
       - name: Restaurar ou gerar debug.keystore
         shell: bash
         run: |
+          set -euo pipefail
+
           if [ ! -s debug.keystore ] && [ -s debug.keystore.base64 ]; then
             base64 --decode debug.keystore.base64 > debug.keystore
           fi
@@ -79,8 +83,8 @@ jobs:
       - name: Gerar APK de Debug
         shell: bash
         run: |
-          chmod +x ./gradlew
-          ./gradlew :app:assembleDebug --no-daemon --stacktrace
+          set -euo pipefail
+          gradle :app:assembleDebug --no-daemon --stacktrace
 
       - name: Disponibilizar APK para download
         uses: actions/upload-artifact@v4
