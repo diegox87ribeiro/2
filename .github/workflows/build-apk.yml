@@ -53,15 +53,23 @@ jobs:
 
       - name: Restaurar ou gerar debug.keystore
         shell: bash
+        env:
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
           set -euo pipefail
 
+          KEYSTORE_SOURCE="repo-debug.keystore"
           if [ ! -s debug.keystore ] && [ -s debug.keystore.base64 ]; then
             base64 --decode debug.keystore.base64 > debug.keystore
+            KEYSTORE_SOURCE="debug.keystore.base64"
+          elif [ ! -s debug.keystore ] && [ -n "${DEBUG_KEYSTORE_BASE64:-}" ]; then
+            printf '%s' "$DEBUG_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > debug.keystore
+            KEYSTORE_SOURCE="secret:DEBUG_KEYSTORE_BASE64"
           fi
 
           if [ ! -s debug.keystore ]; then
-            echo "Gerando keystore temporária..."
+            KEYSTORE_SOURCE="temporaria-aleatoria"
+            echo "AVISO: debug.keystore.base64 e secret DEBUG_KEYSTORE_BASE64 ausentes. Gerando keystore temporária..."
             keytool -genkeypair -v \
               -keystore debug.keystore \
               -storepass android \
@@ -73,12 +81,19 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
           fi
 
-          keytool -list -v \
+          KEYTOOL_INFO="$(keytool -list -v \
             -keystore debug.keystore \
             -alias androiddebugkey \
             -storepass android \
-            -keypass android |
-            grep -E "SHA1:|SHA256:" || true
+            -keypass android || true)"
+          echo "$KEYTOOL_INFO" | grep -E "SHA1:|SHA256:" || true
+          SHA1_COLON="$(echo "$KEYTOOL_INFO" | sed -n 's/.*SHA1:[[:space:]]*\([0-9A-Fa-f:]*\).*/\1/p' | head -n1)"
+          SHA1_HEX="$(echo "$SHA1_COLON" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "APK_SHA1_COLON=$SHA1_COLON"
+            echo "APK_SHA1_HEX=$SHA1_HEX"
+            echo "KEYSTORE_SOURCE=$KEYSTORE_SOURCE"
+          } >> "$GITHUB_ENV"
 
       - name: Restaurar configuração Firebase (se disponível nos Secrets)
         shell: bash
@@ -103,6 +118,45 @@ jobs:
           set -euo pipefail
           if [ -s app/google-services.json ]; then
             echo "OK: app/google-services.json encontrado para compilação."
+            python3 -c '
+            import textwrap
+            exec(textwrap.dedent("""
+            import json, os
+
+            sha1_hex = os.environ.get("APK_SHA1_HEX", "").lower()
+            sha1_colon = os.environ.get("APK_SHA1_COLON", "")
+            keystore_src = os.environ.get("KEYSTORE_SOURCE", "")
+            with open("app/google-services.json", "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            hashes = []
+            for client in data.get("client", []):
+                for oc in client.get("oauth_client", []):
+                    ch = oc.get("android_info", {}).get("certificate_hash")
+                    if ch:
+                        hashes.append(ch.lower())
+
+            matched = sha1_hex in hashes if hashes else False
+            print(f"Keystore source: {keystore_src}")
+            print(f"APK SHA-1: {sha1_colon}")
+            print(f"Firebase certificate_hashes: {hashes}")
+            if hashes and not matched:
+                print("::warning::SHA-1 do APK nao corresponde ao certificate_hash do google-services.json! Login Google sera recusado ate cadastrar este SHA-1 no Firebase ou configurar o secret DEBUG_KEYSTORE_BASE64.")
+
+            summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+            if summary_path:
+                expected_hashes = ", ".join(hashes)
+                with open(summary_path, "a", encoding="utf-8") as s:
+                    s.write("### Diagnostico de Assinatura e Firebase\\n")
+                    s.write(f"- **Origem da Keystore:** `{keystore_src}`\\n")
+                    s.write(f"- **SHA-1 do APK:** `{sha1_colon}`\\n")
+                    if hashes:
+                        s.write(f"- **SHA-1 esperado no google-services.json:** `{expected_hashes}`\\n")
+                    if matched:
+                        s.write("- **Status Login Google:** Compativel (SHA-1 corresponde ao google-services.json)\\n")
+                    else:
+                        s.write("- **Status Login Google:** INCOMPATIVEL — adicione este SHA-1 no Firebase Console (e atualize `GOOGLE_SERVICES_JSON`) OU configure o secret `DEBUG_KEYSTORE_BASE64`.\\n")
+            """))'
           else
             echo "AVISO: app/google-services.json ausente; defina o secret GOOGLE_SERVICES_JSON no GitHub Actions para ativar Login Google, Firestore e Gemini."
           fi

@@ -6,6 +6,8 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.core.app.ApplicationProvider
+import com.example.ui.auth.findActivity
+import com.example.ui.auth.getApkSigningSha1
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -41,5 +43,21 @@ class ExampleRobolectricTest {
         val consumed = CrashReporter.consumeLastCrash(context)
         assertEquals("java.lang.IllegalStateException: Test crash", consumed)
         assertEquals(null, CrashReporter.consumeLastCrash(context))
+    }
+
+    @Test
+    fun `findActivity unwraps ContextWrapper around activity`() {
+        val wrapped = android.content.ContextWrapper(composeRule.activity)
+        assertEquals(composeRule.activity, wrapped.findActivity())
+    }
+
+    @Test
+    fun `getApkSigningSha1 handles Robolectric context without throwing`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        // Must execute safely without throwing even when Robolectric has no signing cert
+        val sha1 = getApkSigningSha1(context)
+        if (sha1 != null) {
+            assertEquals(true, sha1.contains(":"))
+        }
     }
 }
