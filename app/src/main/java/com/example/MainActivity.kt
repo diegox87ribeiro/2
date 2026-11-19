@@ -320,9 +320,10 @@ private fun FirebaseMissingRecoveryGate() {
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "Este APK foi compilado sem o arquivo app/google-services.json no repositório. " +
+                        "Este APK foi compilado no repositório sem a configuração do Firebase (google-services.json). " +
                             "Por isso o Login Google, o Firestore e o Gemini ao vivo estão desativados neste pacote.\n\n" +
-                            "Você pode continuar usando toda a análise local, importação CSV/XLSX e cálculos HHI normalmente.",
+                            "Para ativá-los no próximo build do GitHub Actions, adicione o secret GOOGLE_SERVICES_JSON nas configurações do repositório.\n\n" +
+                            "Enquanto isso, você pode usar toda a análise local, importação CSV/XLSX e cálculos HHI normalmente.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary
                     )

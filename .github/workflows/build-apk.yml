@@ -80,14 +80,31 @@ jobs:
             -keypass android |
             grep -E "SHA1:|SHA256:" || true
 
+      - name: Restaurar configuração Firebase (se disponível nos Secrets)
+        shell: bash
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ ! -s app/google-services.json ]; then
+            if [ -n "${GOOGLE_SERVICES_JSON:-}" ]; then
+              printf '%s\n' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+              echo "OK: app/google-services.json restaurado via secret GOOGLE_SERVICES_JSON."
+            elif [ -n "${GOOGLE_SERVICES_JSON_BASE64:-}" ]; then
+              printf '%s' "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > app/google-services.json
+              echo "OK: app/google-services.json restaurado via secret GOOGLE_SERVICES_JSON_BASE64."
+            fi
+          fi
+
       - name: Verificar configuração Firebase e gerar APK de Debug
         shell: bash
         run: |
           set -euo pipefail
           if [ -s app/google-services.json ]; then
-            echo "OK: app/google-services.json encontrado no repositório."
+            echo "OK: app/google-services.json encontrado para compilação."
           else
-            echo "AVISO: app/google-services.json ausente no repositório; o APK abrirá em Modo Local sem Firebase/Login Google."
+            echo "AVISO: app/google-services.json ausente; defina o secret GOOGLE_SERVICES_JSON no GitHub Actions para ativar Login Google, Firestore e Gemini."
           fi
           gradle :app:assembleDebug --no-daemon --stacktrace
 

@@ -16,6 +16,7 @@ import com.example.domain.model.AiAgentRole
 import com.example.domain.model.AiRecommendation
 import com.example.domain.model.HhiRiskReport
 import com.example.domain.model.MarketAsset
+import com.google.firebase.FirebaseApp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
@@ -90,7 +91,14 @@ class AiAgentsViewModel(application: Application) : AndroidViewModel(application
     private val chatDao = db.chatMessageDao()
     private val aiRepository: AiRepository = FirebaseAiRepository()
 
-    val isLiveGeminiEnabled: Boolean = aiRepository.isLiveGeminiEnabled
+    private fun isFirebaseReady(): Boolean {
+        val app = getApplication<Application>()
+        return runCatching {
+            FirebaseApp.getApps(app).isNotEmpty() || FirebaseApp.initializeApp(app) != null
+        }.getOrDefault(false)
+    }
+
+    val isLiveGeminiEnabled: Boolean = isFirebaseReady() && aiRepository.isLiveGeminiEnabled
 
     private val _promptInput = MutableStateFlow(StructuredPromptInput())
     val promptInput: StateFlow<StructuredPromptInput> = _promptInput.asStateFlow()
@@ -196,6 +204,13 @@ class AiAgentsViewModel(application: Application) : AndroidViewModel(application
             return
         }
 
+        if (!isFirebaseReady()) {
+            _chatUiState.value = AiChatUiState.Error(
+                "Gemini ao vivo indisponível no Modo Local (APK compilado sem configuração Firebase)."
+            )
+            return
+        }
+
         val activeRole = _promptInput.value.selectedRole
         val modelOption = _chatModelOption.value
         val historySnapshot = chatMessages.value.map {
@@ -294,6 +309,12 @@ class AiAgentsViewModel(application: Application) : AndroidViewModel(application
         hhiReport: HhiRiskReport,
         includePersonalPortfolio: Boolean
     ) {
+        if (!isFirebaseReady()) {
+            _uiState.value = AiAgentUiState.Error(
+                "Gemini ao vivo indisponível no Modo Local (APK compilado sem configuração Firebase)."
+            )
+            return
+        }
         val input = _promptInput.value
         viewModelScope.launch {
             _uiState.value = AiAgentUiState.Loading
@@ -332,6 +353,12 @@ class AiAgentsViewModel(application: Application) : AndroidViewModel(application
         hhiReport: HhiRiskReport,
         includePersonalPortfolio: Boolean
     ) {
+        if (!isFirebaseReady()) {
+            _consolidatedRunState.value = ConsolidatedRunState.Error(
+                "Gemini ao vivo indisponível no Modo Local (APK compilado sem configuração Firebase)."
+            )
+            return
+        }
         viewModelScope.launch {
             _consolidatedRunState.value = ConsolidatedRunState.Loading(asset.ticker)
             try {
