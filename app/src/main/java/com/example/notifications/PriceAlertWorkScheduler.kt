@@ -1,6 +1,7 @@
 package com.example.notifications
 
 import android.content.Context
+import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
@@ -27,6 +28,7 @@ object PriceAlertWorkScheduler {
                     TimeUnit.MINUTES
                 )
                     .setConstraints(constraints)
+                    .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                     .build()
                 wm.enqueueUniquePeriodicWork(
                     PERIODIC_WORK_NAME,
@@ -39,16 +41,19 @@ object PriceAlertWorkScheduler {
         }
     }
 
-    fun triggerImmediateCheck(context: Context) {
+    fun triggerImmediateCheck(context: Context, requireNetwork: Boolean = true) {
         runCatching {
-            val constraints = Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED)
-                .build()
-            val immediate = OneTimeWorkRequestBuilder<PriceTargetMonitorWorker>()
-                .setConstraints(constraints)
-                .build()
+            val builder = OneTimeWorkRequestBuilder<PriceTargetMonitorWorker>()
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            if (requireNetwork) {
+                val constraints = Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
+                builder.setConstraints(constraints)
+            }
             WorkManager.getInstance(context.applicationContext)
-                .enqueueUniqueWork(IMMEDIATE_WORK_NAME, ExistingWorkPolicy.REPLACE, immediate)
+                .enqueueUniqueWork(IMMEDIATE_WORK_NAME, ExistingWorkPolicy.REPLACE, builder.build())
         }
     }
 }
+

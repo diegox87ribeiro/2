@@ -17,9 +17,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CryptoVirtualPositionEntity::class,
         SavedAiRecommendationEntity::class,
         ChatMessageEntity::class,
-        PriceTargetAlertEntity::class
+        PriceTargetAlertEntity::class,
+        CachedMarketQuoteEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class InvestDatabase : RoomDatabase() {
@@ -29,6 +30,7 @@ abstract class InvestDatabase : RoomDatabase() {
     abstract fun aiRecommendationDao(): AiRecommendationDao
     abstract fun chatMessageDao(): ChatMessageDao
     abstract fun priceTargetAlertDao(): PriceTargetAlertDao
+    abstract fun cachedMarketQuoteDao(): CachedMarketQuoteDao
 
     companion object {
         @Volatile
@@ -92,6 +94,36 @@ abstract class InvestDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE price_target_alerts ADD COLUMN pendingNotification INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE price_target_alerts ADD COLUMN notificationDelivered INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE price_target_alerts ADD COLUMN offlineQueuedCheck INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE price_target_alerts ADD COLUMN lastCheckStatus TEXT NOT NULL DEFAULT 'Monitorando'")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS cached_market_quotes (
+                        ticker TEXT NOT NULL PRIMARY KEY,
+                        companyName TEXT NOT NULL,
+                        price REAL NOT NULL,
+                        changePercent1d REAL NOT NULL,
+                        dy12m REAL,
+                        pvp REAL,
+                        pl REAL,
+                        roe REAL,
+                        dailyVolumeBrlMillions REAL,
+                        lastDividendBrl REAL,
+                        dataComDay INTEGER,
+                        paymentDay INTEGER,
+                        primarySourceLabel TEXT NOT NULL,
+                        marketTimestampLabel TEXT NOT NULL,
+                        fetchedAtMillis INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getInstance(context: Context): InvestDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -99,7 +131,7 @@ abstract class InvestDatabase : RoomDatabase() {
                     InvestDatabase::class.java,
                     "invest_ai_local.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                 INSTANCE = instance

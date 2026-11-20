@@ -6,6 +6,8 @@ import com.example.data.importexport.ImportParseResult
 import com.example.data.importexport.SpreadsheetImporter
 import com.example.data.local.AiRecommendationDao
 import com.example.data.local.AppPreferencesState
+import com.example.data.local.CachedMarketQuoteDao
+import com.example.data.local.CachedMarketQuoteEntity
 import com.example.data.local.CryptoVirtualDao
 import com.example.data.local.CryptoVirtualPositionEntity
 import com.example.data.local.ImportHistoryEntity
@@ -22,6 +24,7 @@ import com.example.data.local.StrategyCriteriaEntity
 import com.example.data.local.StrategyDao
 import com.example.domain.model.AiRecommendation
 import com.example.domain.model.AssetClass
+import com.example.domain.model.LiveMarketQuote
 import com.example.domain.model.OperationType
 import com.example.domain.model.PortfolioItemView
 import com.example.domain.model.PortfolioType
@@ -41,6 +44,7 @@ class PortfolioRepository(
     private val cryptoDao: CryptoVirtualDao = db.cryptoVirtualDao()
     private val aiDao: AiRecommendationDao = db.aiRecommendationDao()
     private val alertDao: PriceTargetAlertDao = db.priceTargetAlertDao()
+    private val cachedQuoteDao: CachedMarketQuoteDao = db.cachedMarketQuoteDao()
 
     val preferencesFlow: Flow<AppPreferencesState> = prefs.preferencesFlow
 
@@ -71,6 +75,30 @@ class PortfolioRepository(
     val cryptoVirtualPositionsFlow: Flow<List<CryptoVirtualPositionEntity>> = cryptoDao.observePositions()
     val savedAiRecommendationsFlow: Flow<List<SavedAiRecommendationEntity>> = aiDao.observeSaved()
     val priceTargetAlertsFlow: Flow<List<PriceTargetAlertEntity>> = alertDao.observeAll()
+    val cachedLiveQuotesFlow: Flow<Map<String, LiveMarketQuote>> = cachedQuoteDao.observeAll().map { entities ->
+        entities.associate { e ->
+            e.ticker.uppercase() to LiveMarketQuote(
+                ticker = e.ticker.uppercase(),
+                companyName = e.companyName,
+                price = e.price,
+                changePercent1d = e.changePercent1d,
+                dailyVolumeBrlMillions = e.dailyVolumeBrlMillions,
+                priceToEarnings = e.pl,
+                priceToBook = e.pvp,
+                dividendYield12m = e.dy12m,
+                roePercent = e.roe,
+                lastDividendBrl = e.lastDividendBrl,
+                dataComDay = e.dataComDay,
+                paymentDay = e.paymentDay,
+                primarySourceLabel = "${e.primarySourceLabel} (Cache Room)",
+                consultedSources = listOf("Cache Room"),
+                fetchedAtMillis = e.fetchedAtMillis,
+                marketTimestampLabel = e.marketTimestampLabel,
+                b3PageUrl = "https://www.b3.com.br/pt_br/market-data-e-indices/servicos-de-dados/market-data/cotacoes/cotacoes/",
+                advfnPageUrl = "https://br.advfn.com/p.php?pid=qkquote&symbol=BOV%3A${e.ticker.uppercase()}"
+            )
+        }
+    }
 
     suspend fun ensureInitialDefaults() {
         // Inicializa apenas critérios padrão de estratégia e carteira cripto virtual R$ 500
@@ -517,17 +545,78 @@ class PortfolioRepository(
 
     suspend fun getActivePriceTargetAlerts(): List<PriceTargetAlertEntity> = alertDao.getActiveAlerts()
 
+    suspend fun getPendingNotificationAlerts(): List<PriceTargetAlertEntity> = alertDao.getPendingNotificationAlerts()
+
     suspend fun insertPriceTargetAlert(alert: PriceTargetAlertEntity): Long = alertDao.insert(alert)
 
     suspend fun setPriceTargetAlertEnabled(id: Long, enabled: Boolean) = alertDao.setEnabled(id, enabled)
 
     suspend fun rearmPriceTargetAlert(id: Long) = alertDao.rearmAlert(id)
 
-    suspend fun markPriceTargetAlertTriggered(id: Long, evaluatedPriceBrl: Double, triggeredAt: Long) =
-        alertDao.markTriggered(id, evaluatedPriceBrl, triggeredAt)
+    suspend fun markPriceTargetAlertTriggered(
+        id: Long,
+        evaluatedPriceBrl: Double,
+        triggeredAt: Long,
+        notificationDelivered: Boolean = true
+    ) {
+        val status = if (notificationDelivered) {
+            "Meta atingida • Push entregue"
+        } else {
+            "Meta atingida • Push pendente"
+        }
+        alertDao.markTriggered(
+            id = id,
+            evaluatedPriceBrl = evaluatedPriceBrl,
+            triggeredAt = triggeredAt,
+            pendingNotification = !notificationDelivered,
+            notificationDelivered = notificationDelivered,
+            status = status
+        )
+    }
 
-    suspend fun updatePriceTargetAlertEvaluated(id: Long, evaluatedPriceBrl: Double, evaluatedAt: Long) =
-        alertDao.updateLastEvaluated(id, evaluatedPriceBrl, evaluatedAt)
+    suspend fun markPriceTargetAlertNotificationDelivered(id: Long) =
+        alertDao.markNotificationDelivered(id)
+
+    suspend fun markPriceTargetAlertsOfflineQueued(ids: List<Long>) {
+        if (ids.isNotEmpty()) {
+            alertDao.markOfflineQueued(ids)
+        }
+    }
+
+    suspend fun updatePriceTargetAlertEvaluated(
+        id: Long,
+        evaluatedPriceBrl: Double,
+        evaluatedAt: Long,
+        status: String = "Monitorando"
+    ) = alertDao.updateLastEvaluated(id, evaluatedPriceBrl, evaluatedAt, status)
 
     suspend fun deletePriceTargetAlert(id: Long) = alertDao.deleteById(id)
+
+    suspend fun saveCachedLiveQuotes(quotes: Collection<LiveMarketQuote>) {
+        if (quotes.isEmpty()) return
+        val entities = quotes.map { q ->
+            CachedMarketQuoteEntity(
+                ticker = q.ticker.trim().uppercase(),
+                companyName = q.companyName,
+                price = q.price,
+                changePercent1d = q.changePercent1d,
+                dy12m = q.dividendYield12m,
+                pvp = q.priceToBook,
+                pl = q.priceToEarnings,
+                roe = q.roePercent,
+                dailyVolumeBrlMillions = q.dailyVolumeBrlMillions,
+                lastDividendBrl = q.lastDividendBrl,
+                dataComDay = q.dataComDay,
+                paymentDay = q.paymentDay,
+                primarySourceLabel = q.primarySourceLabel,
+                marketTimestampLabel = q.marketTimestampLabel,
+                fetchedAtMillis = q.fetchedAtMillis
+            )
+        }
+        cachedQuoteDao.upsertAll(entities)
+    }
+
+    suspend fun saveCachedLiveQuote(quote: LiveMarketQuote) {
+        saveCachedLiveQuotes(listOf(quote))
+    }
 }

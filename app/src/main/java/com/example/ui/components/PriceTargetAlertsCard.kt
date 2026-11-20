@@ -83,7 +83,8 @@ fun PriceTargetAlertsCard(
     onRearmAlert: (id: Long) -> Unit,
     onDeleteAlert: (id: Long) -> Unit,
     onCheckAlertsNow: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onNotificationPermissionGranted: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var hasNotificationPermission by remember {
@@ -92,7 +93,11 @@ fun PriceTargetAlertsCard(
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
-        hasNotificationPermission = granted || PriceAlertNotificationHelper.hasNotificationPermission(context)
+        val enabledNow = granted || PriceAlertNotificationHelper.hasNotificationPermission(context)
+        hasNotificationPermission = enabledNow
+        if (enabledNow) {
+            onNotificationPermissionGranted()
+        }
     }
 
     var tickerInput by remember { mutableStateOf(suggestedTicker.ifBlank { "VALE3" }) }
@@ -143,7 +148,7 @@ fun PriceTargetAlertsCard(
                 Column {
                     Text("Alertas Push de Meta de Preço", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Monitoramento em segundo plano (15 min) e ao consultar cotações",
+                        "Salvo localmente no Room • Reenvio automático offline (15 min / WorkManager)",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary
                     )
@@ -345,12 +350,16 @@ fun PriceTargetAlertsCard(
                                         color = if (alert.hasTriggered) EmeraldPrimary else MaterialTheme.colorScheme.onSurface
                                     )
                                     val statusText = when {
+                                        alert.hasTriggered && alert.pendingNotification -> "PUSH PENDENTE (ROOM)"
                                         alert.hasTriggered -> "META ATINGIDA"
-                                        alert.isEnabled -> "Ativo"
+                                        alert.offlineQueuedCheck -> "FILA OFFLINE (ROOM)"
+                                        alert.isEnabled -> "Ativo (Room)"
                                         else -> "Pausado"
                                     }
                                     val statusColor = when {
+                                        alert.hasTriggered && alert.pendingNotification -> AmberGold
                                         alert.hasTriggered -> EmeraldPrimary
+                                        alert.offlineQueuedCheck -> AmberGold
                                         alert.isEnabled -> ElectricCyan
                                         else -> TextSecondary
                                     }
@@ -361,13 +370,16 @@ fun PriceTargetAlertsCard(
                                     val timeStr = evalTime?.let { " (${dateFmt.format(Date(it))})" }.orEmpty()
                                     Text(
                                         if (alert.hasTriggered) {
-                                            "Push disparado a ${formatBrl(lastPrice)}$timeStr"
+                                            "Push ${if (alert.notificationDelivered) "entregue" else "pendente no Room"} a ${formatBrl(lastPrice)}$timeStr"
                                         } else {
                                             "Última cotação: ${formatBrl(lastPrice)}$timeStr"
                                         },
                                         style = MaterialTheme.typography.bodySmall,
                                         color = if (alert.hasTriggered) EmeraldPrimary else TextSecondary
                                     )
+                                }
+                                if (alert.offlineQueuedCheck && alert.lastCheckStatus.isNotBlank()) {
+                                    Text(alert.lastCheckStatus, style = MaterialTheme.typography.labelSmall, color = AmberGold)
                                 }
                                 if (alert.notes.isNotBlank()) {
                                     Text(alert.notes, style = MaterialTheme.typography.labelSmall, color = TextSecondary)

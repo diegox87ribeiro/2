@@ -122,7 +122,28 @@ data class PriceTargetAlertEntity(
     val lastEvaluatedPriceBrl: Double? = null,
     val lastEvaluatedAt: Long? = null,
     val notes: String = "",
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val pendingNotification: Boolean = false,
+    val notificationDelivered: Boolean = false,
+    val offlineQueuedCheck: Boolean = false,
+    val lastCheckStatus: String = "Monitorando"
 )
 
-
+@Entity(tableName = "cached_market_quotes")
+data class CachedMarketQuoteEntity(
+    @PrimaryKey val ticker: String,
+    val companyName: String,
+    val price: Double,
+    val changePercent1d: Double,
+    val dy12m: Double? = null,
+    val pvp: Double? = null,
+    val pl: Double? = null,
+    val roe: Double? = null,
+    val dailyVolumeBrlMillions: Double? = null,
+    val lastDividendBrl: Double? = null,
+    val dataComDay: Int? = null,
+    val paymentDay: Int? = null,
+    val primarySourceLabel: String,
+    val marketTimestampLabel: String,
+    val fetchedAtMillis: Long
+)

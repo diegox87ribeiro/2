@@ -115,6 +115,11 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
     private val _statusBannerMessage = MutableStateFlow<String?>(null)
     val statusBannerMessage: StateFlow<String?> = _statusBannerMessage.asStateFlow()
 
+    private val mergedLiveQuotesFlow = combine(
+        repository.cachedLiveQuotesFlow,
+        _liveQuotesByTicker
+    ) { cached, fresh -> cached + fresh }
+
     val dashboardState: StateFlow<InvestDashboardState> = combine(
         repository.positionsFlow,
         repository.operationsFlow,
@@ -124,7 +129,7 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         repository.strategyChangeLogFlow,
         repository.cryptoVirtualPositionsFlow,
         repository.savedAiRecommendationsFlow,
-        _liveQuotesByTicker,
+        mergedLiveQuotesFlow,
         _liveLookupState,
         _isLiveBatchRefreshing,
         _profitConnectionState,
@@ -229,11 +234,16 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         }
         viewModelScope.launch {
             repository.priceTargetAlertsFlow
-                .map { alerts -> alerts.any { it.isEnabled && !it.hasTriggered } }
-                .distinctUntilChanged()
-                .collect { hasActive ->
-                    PriceAlertWorkScheduler.syncSchedule(getApplication(), hasActive)
+                .map { alerts ->
+                    alerts.any { (it.isEnabled && !it.hasTriggered) || (it.hasTriggered && it.pendingNotification) }
                 }
+                .distinctUntilChanged()
+                .collect { hasActiveOrPending ->
+                    PriceAlertWorkScheduler.syncSchedule(getApplication(), hasActiveOrPending)
+                }
+        }
+        viewModelScope.launch {
+            flushPendingPriceNotifications()
         }
     }
 
@@ -544,6 +554,7 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
             result.onSuccess { quote ->
                 _liveQuotesByTicker.value = _liveQuotesByTicker.value + (quote.ticker to quote)
                 _liveLookupState.value = LiveQuoteLookupState.Success(quote)
+                withContext(Dispatchers.IO) { repository.saveCachedLiveQuote(quote) }
                 evaluateLiveQuotesAgainstAlerts(mapOf(quote.ticker.uppercase() to quote), notifyIfNoneTriggered = false)
             }.onFailure { err ->
                 _liveLookupState.value = LiveQuoteLookupState.Error(
@@ -565,10 +576,11 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                 val fetched = liveMarketRepository.fetchBatchQuotes(clean)
                 if (fetched.isNotEmpty()) {
                     _liveQuotesByTicker.value = _liveQuotesByTicker.value + fetched
+                    withContext(Dispatchers.IO) { repository.saveCachedLiveQuotes(fetched.values) }
                     evaluateLiveQuotesAgainstAlerts(fetched, notifyIfNoneTriggered = false)
-                    _statusBannerMessage.value = "${fetched.size} ativo(s) atualizado(s) em tempo real (B3 / Mercado)."
+                    _statusBannerMessage.value = "${fetched.size} ativo(s) atualizado(s) em tempo real e salvo(s) no cache local."
                 } else {
-                    _statusBannerMessage.value = "Nenhuma cotação ao vivo pôde ser obtida. Verifique a conexão com a internet."
+                    _statusBannerMessage.value = "Sem conexão no momento. Exibindo últimos dados salvos localmente no Room."
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -582,7 +594,7 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
 
     fun applyLiveQuoteToPortfolio(ticker: String) {
         val clean = LiveQuoteParsers.normalizeTicker(ticker)
-        val live = _liveQuotesByTicker.value[clean] ?: return
+        val live = dashboardState.value.liveQuotesByTicker[clean] ?: _liveQuotesByTicker.value[clean] ?: return
         viewModelScope.launch {
             val updatedCount = withContext(Dispatchers.IO) {
                 repository.applyLivePriceToPortfolio(clean, live.price)
@@ -615,6 +627,7 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                     _liveQuotesByTicker.value = _liveQuotesByTicker.value + fetched
                     var appliedPositions = 0
                     withContext(Dispatchers.IO) {
+                        repository.saveCachedLiveQuotes(fetched.values)
                         fetched.forEach { (ticker, quote) ->
                             appliedPositions += repository.applyLivePriceToPortfolio(ticker, quote.price)
                         }
@@ -622,7 +635,7 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                     evaluateLiveQuotesAgainstAlerts(fetched, notifyIfNoneTriggered = false)
                     _statusBannerMessage.value = "${fetched.size} ativo(s) consultado(s) ao vivo e $appliedPositions posição(ões) atualizada(s)."
                 } else {
-                    _statusBannerMessage.value = "Nenhuma cotação ao vivo pôde ser obtida. Verifique sua conexão."
+                    _statusBannerMessage.value = "Nenhuma cotação ao vivo pôde ser obtida. Dados locais preservados no Room."
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -762,11 +775,17 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                 val liveFetch = liveMarketRepository.fetchLiveQuote(ticker)
                 liveFetch.onSuccess { quote ->
                     _liveQuotesByTicker.value = _liveQuotesByTicker.value + (quote.ticker to quote)
+                    withContext(Dispatchers.IO) { repository.saveCachedLiveQuote(quote) }
                     evaluateLiveQuotesAgainstAlerts(mapOf(quote.ticker.uppercase() to quote), notifyIfNoneTriggered = false)
                 }.onFailure {
-                    // Fallback para avaliação posterior pelo WorkManager periódico se offline
+                    // Dispositivo temporariamente offline: registra estado em fila offline no Room e agenda WorkManager
                     if (insertedId > 0L) {
-                        PriceAlertWorkScheduler.triggerImmediateCheck(getApplication())
+                        withContext(Dispatchers.IO) {
+                            repository.markPriceTargetAlertsOfflineQueued(listOf(insertedId))
+                        }
+                        PriceAlertWorkScheduler.triggerImmediateCheck(getApplication(), requireNetwork = true)
+                        _statusBannerMessage.value =
+                            "Meta de $ticker salva localmente no Room. Push será disparado assim que a conexão voltar."
                     }
                 }
             }
@@ -784,7 +803,7 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
             withContext(Dispatchers.IO) {
                 repository.rearmPriceTargetAlert(id)
             }
-            _statusBannerMessage.value = "Alerta reativado para monitoramento contínuo."
+            _statusBannerMessage.value = "Alerta reativado no Room para monitoramento contínuo."
         }
     }
 
@@ -794,27 +813,63 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun onNotificationPermissionGranted() {
+        viewModelScope.launch {
+            flushPendingPriceNotifications()
+        }
+    }
+
     fun checkPriceAlertsNow() {
         if (_isCheckingPriceAlerts.value) return
         viewModelScope.launch {
             _isCheckingPriceAlerts.value = true
             try {
+                flushPendingPriceNotifications()
                 val activeAlerts = withContext(Dispatchers.IO) { repository.getActivePriceTargetAlerts() }
                 if (activeAlerts.isEmpty()) {
-                    _statusBannerMessage.value = "Nenhum alerta ativo para verificar no momento."
+                    _statusBannerMessage.value = "Nenhum alerta ativo pendente no momento."
                     return@launch
                 }
                 val tickers = activeAlerts.map { it.ticker.trim().uppercase() }.distinct()
                 val fetched = liveMarketRepository.fetchBatchQuotes(tickers)
                 if (fetched.isEmpty()) {
-                    _statusBannerMessage.value = "Não foi possível consultar cotações ao vivo agora. O monitoramento em segundo plano continua ativo."
+                    withContext(Dispatchers.IO) {
+                        repository.markPriceTargetAlertsOfflineQueued(activeAlerts.map { it.id })
+                    }
+                    PriceAlertWorkScheduler.triggerImmediateCheck(getApplication(), requireNetwork = true)
+                    _statusBannerMessage.value = "Sem internet agora. Metas persistidas no Room e enfileiradas para disparo automático ao reconectar."
                 } else {
                     _liveQuotesByTicker.value = _liveQuotesByTicker.value + fetched
+                    withContext(Dispatchers.IO) { repository.saveCachedLiveQuotes(fetched.values) }
                     evaluateLiveQuotesAgainstAlerts(fetched, notifyIfNoneTriggered = true)
                 }
             } finally {
                 _isCheckingPriceAlerts.value = false
             }
+        }
+    }
+
+    private suspend fun flushPendingPriceNotifications() {
+        val pending = withContext(Dispatchers.IO) { repository.getPendingNotificationAlerts() }
+        if (pending.isEmpty()) return
+        var deliveredCount = 0
+        pending.forEach { alert ->
+            val evalPrice = alert.lastEvaluatedPriceBrl ?: alert.targetPriceBrl
+            val delivered = PriceAlertNotificationHelper.sendPriceTargetNotification(
+                context = getApplication(),
+                alert = alert,
+                currentPriceBrl = evalPrice,
+                sourceLabel = "Persistência Local Room"
+            )
+            if (delivered) {
+                deliveredCount++
+                withContext(Dispatchers.IO) {
+                    repository.markPriceTargetAlertNotificationDelivered(alert.id)
+                }
+            }
+        }
+        if (deliveredCount > 0) {
+            _statusBannerMessage.value = "$deliveredCount notificação(ões) de meta pendente(s) entregue(s) do cache Room."
         }
     }
 
@@ -827,30 +882,46 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
 
         val now = System.currentTimeMillis()
         val triggeredList = mutableListOf<String>()
+        var pendingPushCount = 0
 
         activeAlerts.forEach { alert ->
             val key = alert.ticker.trim().uppercase()
             val quote = quotes[key] ?: return@forEach
             if (PriceTargetEvaluator.isTargetReached(alert, quote.price)) {
-                PriceAlertNotificationHelper.sendPriceTargetNotification(
+                val delivered = PriceAlertNotificationHelper.sendPriceTargetNotification(
                     context = getApplication(),
                     alert = alert,
                     currentPriceBrl = quote.price,
                     sourceLabel = quote.primarySourceLabel
                 )
                 withContext(Dispatchers.IO) {
-                    repository.markPriceTargetAlertTriggered(alert.id, quote.price, now)
+                    repository.markPriceTargetAlertTriggered(
+                        id = alert.id,
+                        evaluatedPriceBrl = quote.price,
+                        triggeredAt = now,
+                        notificationDelivered = delivered
+                    )
                 }
+                if (!delivered) pendingPushCount++
                 triggeredList.add("$key a R$ ${"%.2f".format(quote.price)}")
             } else {
                 withContext(Dispatchers.IO) {
-                    repository.updatePriceTargetAlertEvaluated(alert.id, quote.price, now)
+                    repository.updatePriceTargetAlertEvaluated(
+                        id = alert.id,
+                        evaluatedPriceBrl = quote.price,
+                        evaluatedAt = now,
+                        status = "Monitorado via ${quote.primarySourceLabel}"
+                    )
                 }
             }
         }
 
         if (triggeredList.isNotEmpty()) {
-            _statusBannerMessage.value = "Meta atingida! Notificação enviada: ${triggeredList.joinToString(", ")}"
+            _statusBannerMessage.value = if (pendingPushCount > 0) {
+                "Meta atingida (${triggeredList.joinToString(", ")}). Salva no Room aguardando permissão de push."
+            } else {
+                "Meta atingida! Notificação enviada: ${triggeredList.joinToString(", ")}"
+            }
         } else if (notifyIfNoneTriggered) {
             _statusBannerMessage.value = "Cotações verificadas ao vivo: nenhuma meta atingida ainda."
         }

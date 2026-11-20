@@ -618,7 +618,8 @@ private fun MainScaffoldBody(
                             onTogglePriceAlert = viewModel::togglePriceTargetAlert,
                             onRearmPriceAlert = viewModel::rearmPriceTargetAlert,
                             onDeletePriceAlert = viewModel::deletePriceTargetAlert,
-                            onCheckPriceAlertsNow = viewModel::checkPriceAlertsNow
+                            onCheckPriceAlertsNow = viewModel::checkPriceAlertsNow,
+                            onNotificationPermissionGranted = viewModel::onNotificationPermissionGranted
                         )
                     }
                     composable(InvestRoutes.ROUTE_TECNICA) {
@@ -630,7 +631,8 @@ private fun MainScaffoldBody(
                             onTogglePriceAlert = viewModel::togglePriceTargetAlert,
                             onRearmPriceAlert = viewModel::rearmPriceTargetAlert,
                             onDeletePriceAlert = viewModel::deletePriceTargetAlert,
-                            onCheckPriceAlertsNow = viewModel::checkPriceAlertsNow
+                            onCheckPriceAlertsNow = viewModel::checkPriceAlertsNow,
+                            onNotificationPermissionGranted = viewModel::onNotificationPermissionGranted
                         )
                     }
                     composable(InvestRoutes.ROUTE_RISCO_HHI) { RiskHhiScreen(state) }

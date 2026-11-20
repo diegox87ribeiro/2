@@ -532,6 +532,94 @@ class ConsolidatedReportsRobolectricTest {
             .getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString().orEmpty()
         org.junit.Assert.assertTrue(postedTitle.contains("Meta atingida"))
     }
+
+    @Test
+    fun `room persists price target alerts, offline queue, cached quotes and flushes pending notifications offline`() =
+        kotlinx.coroutines.runBlocking {
+            val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.app.Application>()
+            org.robolectric.Shadows.shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+
+            val db = androidx.room.Room.inMemoryDatabaseBuilder(
+                context,
+                com.example.data.local.InvestDatabase::class.java
+            ).allowMainThreadQueries().build()
+
+            try {
+                val alertDao = db.priceTargetAlertDao()
+                val cacheDao = db.cachedMarketQuoteDao()
+
+                val alertId = alertDao.insert(
+                    com.example.data.local.PriceTargetAlertEntity(
+                        ticker = "MXRF11",
+                        targetPriceBrl = 9.60,
+                        condition = com.example.domain.model.PriceAlertCondition.AT_OR_BELOW.code,
+                        isEnabled = true,
+                        hasTriggered = false,
+                        notes = "Aporte FII offline"
+                    )
+                )
+
+                // Simula dispositivo temporariamente offline: alerta fica enfileirado no Room
+                alertDao.markOfflineQueued(listOf(alertId))
+                val queued = alertDao.getActiveAlerts().first { it.id == alertId }
+                org.junit.Assert.assertTrue(queued.offlineQueuedCheck)
+                org.junit.Assert.assertEquals("Offline • Aguardando conexão (Room)", queued.lastCheckStatus)
+
+                // Persiste cotação em cache no Room e simula disparo com entrega pendente
+                val now = System.currentTimeMillis()
+                cacheDao.upsert(
+                    com.example.data.local.CachedMarketQuoteEntity(
+                        ticker = "MXRF11",
+                        companyName = "Maxi Renda FII",
+                        price = 9.52,
+                        changePercent1d = -1.2,
+                        dy12m = 12.6,
+                        pvp = 0.98,
+                        lastDividendBrl = 0.10,
+                        dataComDay = 30,
+                        paymentDay = 15,
+                        primarySourceLabel = "B3 Oficial",
+                        marketTimestampLabel = "20/11/2026 14:40",
+                        fetchedAtMillis = now
+                    )
+                )
+                val cachedQuote = cacheDao.getByTicker("MXRF11")
+                org.junit.Assert.assertNotNull(cachedQuote)
+                org.junit.Assert.assertEquals(9.52, cachedQuote!!.price, 0.001)
+
+                alertDao.markTriggered(
+                    id = alertId,
+                    evaluatedPriceBrl = cachedQuote.price,
+                    triggeredAt = now,
+                    pendingNotification = true,
+                    notificationDelivered = false,
+                    status = "Meta atingida • Push pendente"
+                )
+
+                val pendingList = alertDao.getPendingNotificationAlerts()
+                org.junit.Assert.assertEquals(1, pendingList.size)
+
+                val delivered = com.example.notifications.PriceAlertNotificationHelper.sendPriceTargetNotification(
+                    context = context,
+                    alert = pendingList.first(),
+                    currentPriceBrl = pendingList.first().lastEvaluatedPriceBrl!!,
+                    sourceLabel = "Cache local Room"
+                )
+                org.junit.Assert.assertTrue(delivered)
+                alertDao.markNotificationDelivered(alertId)
+
+                org.junit.Assert.assertTrue(alertDao.getPendingNotificationAlerts().isEmpty())
+                val nm = context.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+                val notifications = org.robolectric.Shadows.shadowOf(nm).allNotifications
+                org.junit.Assert.assertTrue(
+                    notifications.any {
+                        it.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString()?.contains("MXRF11") == true
+                    }
+                )
+            } finally {
+                db.close()
+            }
+        }
 }
 
 

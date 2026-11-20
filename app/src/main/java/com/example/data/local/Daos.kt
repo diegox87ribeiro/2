@@ -167,6 +167,9 @@ interface PriceTargetAlertDao {
     @Query("SELECT * FROM price_target_alerts WHERE isEnabled = 1 AND hasTriggered = 0")
     suspend fun getActiveAlerts(): List<PriceTargetAlertEntity>
 
+    @Query("SELECT * FROM price_target_alerts WHERE hasTriggered = 1 AND pendingNotification = 1")
+    suspend fun getPendingNotificationAlerts(): List<PriceTargetAlertEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(alert: PriceTargetAlertEntity): Long
 
@@ -178,7 +181,11 @@ interface PriceTargetAlertDao {
         UPDATE price_target_alerts
         SET isEnabled = 1,
             hasTriggered = 0,
-            triggeredAt = NULL
+            triggeredAt = NULL,
+            pendingNotification = 0,
+            notificationDelivered = 0,
+            offlineQueuedCheck = 0,
+            lastCheckStatus = 'Monitorando'
         WHERE id = :id
         """
     )
@@ -190,24 +197,85 @@ interface PriceTargetAlertDao {
         SET hasTriggered = 1,
             triggeredAt = :triggeredAt,
             lastEvaluatedPriceBrl = :evaluatedPriceBrl,
-            lastEvaluatedAt = :triggeredAt
+            lastEvaluatedAt = :triggeredAt,
+            offlineQueuedCheck = 0,
+            pendingNotification = :pendingNotification,
+            notificationDelivered = :notificationDelivered,
+            lastCheckStatus = :status
         WHERE id = :id
         """
     )
-    suspend fun markTriggered(id: Long, evaluatedPriceBrl: Double, triggeredAt: Long)
+    suspend fun markTriggered(
+        id: Long,
+        evaluatedPriceBrl: Double,
+        triggeredAt: Long,
+        pendingNotification: Boolean = false,
+        notificationDelivered: Boolean = true,
+        status: String = "Meta atingida • Push entregue"
+    )
+
+    @Query(
+        """
+        UPDATE price_target_alerts
+        SET pendingNotification = 0,
+            notificationDelivered = 1,
+            lastCheckStatus = :status
+        WHERE id = :id
+        """
+    )
+    suspend fun markNotificationDelivered(
+        id: Long,
+        status: String = "Meta atingida • Push entregue"
+    )
+
+    @Query(
+        """
+        UPDATE price_target_alerts
+        SET offlineQueuedCheck = 1,
+            lastCheckStatus = :status
+        WHERE id IN (:ids)
+        """
+    )
+    suspend fun markOfflineQueued(
+        ids: List<Long>,
+        status: String = "Offline • Aguardando conexão (Room)"
+    )
 
     @Query(
         """
         UPDATE price_target_alerts
         SET lastEvaluatedPriceBrl = :evaluatedPriceBrl,
-            lastEvaluatedAt = :evaluatedAt
+            lastEvaluatedAt = :evaluatedAt,
+            offlineQueuedCheck = 0,
+            lastCheckStatus = :status
         WHERE id = :id
         """
     )
-    suspend fun updateLastEvaluated(id: Long, evaluatedPriceBrl: Double, evaluatedAt: Long)
+    suspend fun updateLastEvaluated(
+        id: Long,
+        evaluatedPriceBrl: Double,
+        evaluatedAt: Long,
+        status: String = "Monitorando"
+    )
 
     @Query("DELETE FROM price_target_alerts WHERE id = :id")
     suspend fun deleteById(id: Long)
 }
 
+@Dao
+interface CachedMarketQuoteDao {
+    @Query("SELECT * FROM cached_market_quotes")
+    fun observeAll(): Flow<List<CachedMarketQuoteEntity>>
 
+    @Query("SELECT * FROM cached_market_quotes")
+    suspend fun getAllOnce(): List<CachedMarketQuoteEntity>
+
+    @Query("SELECT * FROM cached_market_quotes WHERE ticker = :ticker LIMIT 1")
+    suspend fun getByTicker(ticker: String): CachedMarketQuoteEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(quote: CachedMarketQuoteEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(quotes: List<CachedMarketQuoteEntity>)
+}

@@ -83,7 +83,8 @@ fun FundamentalAnalysisScreen(
     onTogglePriceAlert: (Long, Boolean) -> Unit = { _, _ -> },
     onRearmPriceAlert: (Long) -> Unit = {},
     onDeletePriceAlert: (Long) -> Unit = {},
-    onCheckPriceAlertsNow: () -> Unit = {}
+    onCheckPriceAlertsNow: () -> Unit = {},
+    onNotificationPermissionGranted: () -> Unit = {}
 ) {
     val c = state.strategyCriteria
     var minDy by remember(c) { mutableFloatStateOf(c.minDyPercent.toFloat()) }
@@ -165,7 +166,8 @@ fun FundamentalAnalysisScreen(
                 onToggleAlert = onTogglePriceAlert,
                 onRearmAlert = onRearmPriceAlert,
                 onDeleteAlert = onDeletePriceAlert,
-                onCheckAlertsNow = onCheckPriceAlertsNow
+                onCheckAlertsNow = onCheckPriceAlertsNow,
+                onNotificationPermissionGranted = onNotificationPermissionGranted
             )
         }
 
@@ -416,7 +418,8 @@ fun TechnicalAnalysisScreen(
     onTogglePriceAlert: (Long, Boolean) -> Unit = { _, _ -> },
     onRearmPriceAlert: (Long) -> Unit = {},
     onDeletePriceAlert: (Long) -> Unit = {},
-    onCheckPriceAlertsNow: () -> Unit = {}
+    onCheckPriceAlertsNow: () -> Unit = {},
+    onNotificationPermissionGranted: () -> Unit = {}
 ) {
     val assets = state.marketAssets
     val ownedTickers = remember(state.realPositions) {
@@ -490,7 +493,8 @@ fun TechnicalAnalysisScreen(
                 onToggleAlert = onTogglePriceAlert,
                 onRearmAlert = onRearmPriceAlert,
                 onDeleteAlert = onDeletePriceAlert,
-                onCheckAlertsNow = onCheckPriceAlertsNow
+                onCheckAlertsNow = onCheckPriceAlertsNow,
+                onNotificationPermissionGranted = onNotificationPermissionGranted
             )
         }
 
