@@ -46,6 +46,7 @@ import com.example.domain.model.AssetClass
 import com.example.domain.model.FundamentalFilterCriteria
 import com.example.domain.model.LiveQuoteLookupState
 import com.example.domain.model.MarketAsset
+import com.example.domain.model.PriceAlertCondition
 import com.example.domain.model.ValuationAndComparisonCalculator
 import kotlin.math.roundToInt
 import com.example.ui.components.AssetDetailSheetContent
@@ -53,6 +54,7 @@ import com.example.ui.components.DataDisclaimerBanner
 import com.example.ui.components.FilterChipBar
 import com.example.ui.components.FintechCard
 import com.example.ui.components.LiveMarketLookupPanel
+import com.example.ui.components.PriceTargetAlertsCard
 import com.example.ui.components.TechnicalPriceChart
 import com.example.ui.components.formatBrl
 import com.example.ui.components.formatPct
@@ -76,7 +78,12 @@ fun FundamentalAnalysisScreen(
     onUpdateCriteria: (StrategyCriteriaEntity, String) -> Unit,
     onQueryLiveQuote: (String) -> Unit = {},
     onRefreshLiveBatch: (List<String>) -> Unit = {},
-    onApplyLiveQuoteToPortfolio: (String) -> Unit = {}
+    onApplyLiveQuoteToPortfolio: (String) -> Unit = {},
+    onCreatePriceAlert: (String, Double, PriceAlertCondition, String) -> Unit = { _, _, _, _ -> },
+    onTogglePriceAlert: (Long, Boolean) -> Unit = { _, _ -> },
+    onRearmPriceAlert: (Long) -> Unit = {},
+    onDeletePriceAlert: (Long) -> Unit = {},
+    onCheckPriceAlertsNow: () -> Unit = {}
 ) {
     val c = state.strategyCriteria
     var minDy by remember(c) { mutableFloatStateOf(c.minDyPercent.toFloat()) }
@@ -140,6 +147,25 @@ fun FundamentalAnalysisScreen(
                 onQueryTicker = onQueryLiveQuote,
                 onApplyPriceToPortfolio = onApplyLiveQuoteToPortfolio,
                 initialTicker = quickTickers.firstOrNull() ?: "VALE3"
+            )
+        }
+
+        item {
+            val activeLookupTicker = (state.liveLookupState as? LiveQuoteLookupState.Success)?.quote?.ticker
+                ?: (state.liveLookupState as? LiveQuoteLookupState.Loading)?.ticker
+                ?: inspectedTicker
+                ?: quickTickers.firstOrNull()
+                ?: "VALE3"
+            PriceTargetAlertsCard(
+                alerts = state.priceTargetAlerts,
+                marketAssets = state.marketAssets,
+                suggestedTicker = activeLookupTicker,
+                isCheckingAlerts = state.isCheckingPriceAlerts,
+                onCreateAlert = onCreatePriceAlert,
+                onToggleAlert = onTogglePriceAlert,
+                onRearmAlert = onRearmPriceAlert,
+                onDeleteAlert = onDeletePriceAlert,
+                onCheckAlertsNow = onCheckPriceAlertsNow
             )
         }
 
@@ -385,7 +411,12 @@ fun FundamentalAnalysisScreen(
 fun TechnicalAnalysisScreen(
     state: InvestDashboardState,
     onQueryLiveQuote: (String) -> Unit = {},
-    onApplyLiveQuoteToPortfolio: (String) -> Unit = {}
+    onApplyLiveQuoteToPortfolio: (String) -> Unit = {},
+    onCreatePriceAlert: (String, Double, PriceAlertCondition, String) -> Unit = { _, _, _, _ -> },
+    onTogglePriceAlert: (Long, Boolean) -> Unit = { _, _ -> },
+    onRearmPriceAlert: (Long) -> Unit = {},
+    onDeletePriceAlert: (Long) -> Unit = {},
+    onCheckPriceAlertsNow: () -> Unit = {}
 ) {
     val assets = state.marketAssets
     val ownedTickers = remember(state.realPositions) {
@@ -446,6 +477,20 @@ fun TechnicalAnalysisScreen(
                 },
                 onApplyPriceToPortfolio = onApplyLiveQuoteToPortfolio,
                 initialTicker = selectedTicker
+            )
+        }
+
+        item {
+            PriceTargetAlertsCard(
+                alerts = state.priceTargetAlerts,
+                marketAssets = state.marketAssets,
+                suggestedTicker = selectedTicker,
+                isCheckingAlerts = state.isCheckingPriceAlerts,
+                onCreateAlert = onCreatePriceAlert,
+                onToggleAlert = onTogglePriceAlert,
+                onRearmAlert = onRearmPriceAlert,
+                onDeleteAlert = onDeletePriceAlert,
+                onCheckAlertsNow = onCheckPriceAlertsNow
             )
         }
 

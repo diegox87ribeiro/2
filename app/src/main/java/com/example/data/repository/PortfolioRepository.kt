@@ -14,6 +14,8 @@ import com.example.data.local.PortfolioDao
 import com.example.data.local.PortfolioOperationEntity
 import com.example.data.local.PortfolioPositionEntity
 import com.example.data.local.PreferencesManager
+import com.example.data.local.PriceTargetAlertDao
+import com.example.data.local.PriceTargetAlertEntity
 import com.example.data.local.SavedAiRecommendationEntity
 import com.example.data.local.StrategyChangeLogEntity
 import com.example.data.local.StrategyCriteriaEntity
@@ -38,6 +40,7 @@ class PortfolioRepository(
     private val strategyDao: StrategyDao = db.strategyDao()
     private val cryptoDao: CryptoVirtualDao = db.cryptoVirtualDao()
     private val aiDao: AiRecommendationDao = db.aiRecommendationDao()
+    private val alertDao: PriceTargetAlertDao = db.priceTargetAlertDao()
 
     val preferencesFlow: Flow<AppPreferencesState> = prefs.preferencesFlow
 
@@ -67,6 +70,7 @@ class PortfolioRepository(
     val strategyChangeLogFlow: Flow<List<StrategyChangeLogEntity>> = strategyDao.observeChangeLog()
     val cryptoVirtualPositionsFlow: Flow<List<CryptoVirtualPositionEntity>> = cryptoDao.observePositions()
     val savedAiRecommendationsFlow: Flow<List<SavedAiRecommendationEntity>> = aiDao.observeSaved()
+    val priceTargetAlertsFlow: Flow<List<PriceTargetAlertEntity>> = alertDao.observeAll()
 
     suspend fun ensureInitialDefaults() {
         // Inicializa apenas critérios padrão de estratégia e carteira cripto virtual R$ 500
@@ -510,4 +514,20 @@ class PortfolioRepository(
             )
         )
     }
+
+    suspend fun getActivePriceTargetAlerts(): List<PriceTargetAlertEntity> = alertDao.getActiveAlerts()
+
+    suspend fun insertPriceTargetAlert(alert: PriceTargetAlertEntity): Long = alertDao.insert(alert)
+
+    suspend fun setPriceTargetAlertEnabled(id: Long, enabled: Boolean) = alertDao.setEnabled(id, enabled)
+
+    suspend fun rearmPriceTargetAlert(id: Long) = alertDao.rearmAlert(id)
+
+    suspend fun markPriceTargetAlertTriggered(id: Long, evaluatedPriceBrl: Double, triggeredAt: Long) =
+        alertDao.markTriggered(id, evaluatedPriceBrl, triggeredAt)
+
+    suspend fun updatePriceTargetAlertEvaluated(id: Long, evaluatedPriceBrl: Double, evaluatedAt: Long) =
+        alertDao.updateLastEvaluated(id, evaluatedPriceBrl, evaluatedAt)
+
+    suspend fun deletePriceTargetAlert(id: Long) = alertDao.deleteById(id)
 }

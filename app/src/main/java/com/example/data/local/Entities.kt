@@ -110,3 +110,19 @@ data class ChatMessageEntity(
     val createdAt: Long = System.currentTimeMillis()
 )
 
+@Entity(tableName = "price_target_alerts")
+data class PriceTargetAlertEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val ticker: String,
+    val targetPriceBrl: Double,
+    val condition: String = "AT_OR_BELOW",
+    val isEnabled: Boolean = true,
+    val hasTriggered: Boolean = false,
+    val triggeredAt: Long? = null,
+    val lastEvaluatedPriceBrl: Double? = null,
+    val lastEvaluatedAt: Long? = null,
+    val notes: String = "",
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+

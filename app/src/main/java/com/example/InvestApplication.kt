@@ -12,5 +12,6 @@ class InvestApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         CrashReporter.install(this)
+        runCatching { com.example.notifications.PriceAlertNotificationHelper.ensureChannel(this) }
     }
 }

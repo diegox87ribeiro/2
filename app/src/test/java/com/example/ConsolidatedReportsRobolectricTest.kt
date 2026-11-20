@@ -470,6 +470,69 @@ class ConsolidatedReportsRobolectricTest {
             .performScrollToNode(hasTestTag("comparator_table_header_WEGE3"))
         composeRule.onNodeWithTag("comparator_table_header_WEGE3").assertIsDisplayed()
     }
+
+    @Test
+    fun `analysis screen creates price target alert and notification helper dispatches Android push notification`() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.app.Application>()
+        val appShadow = org.robolectric.Shadows.shadowOf(context)
+        appShadow.grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+
+        var createdAlerts by mutableStateOf(emptyList<com.example.data.local.PriceTargetAlertEntity>())
+
+        composeRule.setContent {
+            InvestAiTheme {
+                com.example.ui.screens.FundamentalAnalysisScreen(
+                    state = com.example.ui.viewmodel.InvestDashboardState(
+                        priceTargetAlerts = createdAlerts
+                    ),
+                    onUpdateCriteria = { _, _ -> },
+                    onCreatePriceAlert = { ticker, target, cond, notes ->
+                        createdAlerts = createdAlerts + com.example.data.local.PriceTargetAlertEntity(
+                            id = 1L,
+                            ticker = ticker,
+                            targetPriceBrl = target,
+                            condition = cond.code,
+                            isEnabled = true,
+                            hasTriggered = true,
+                            triggeredAt = 1_763_578_800_000L,
+                            lastEvaluatedPriceBrl = 59.50,
+                            lastEvaluatedAt = 1_763_578_800_000L,
+                            notes = notes
+                        )
+                    }
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("fundamental_lazy_column")
+            .performScrollToNode(hasTestTag("alert_target_price_input"))
+        composeRule.onNodeWithTag("alert_target_price_input").performTextInput("60,00")
+        composeRule.onNodeWithTag("fundamental_lazy_column")
+            .performScrollToNode(hasTestTag("create_price_alert_button"))
+        composeRule.onNodeWithTag("create_price_alert_button").performClick()
+
+        composeRule.onNodeWithTag("fundamental_lazy_column")
+            .performScrollToNode(hasTestTag("price_alert_item_ITUB4"))
+        composeRule.onNodeWithTag("price_alert_item_ITUB4").assertIsDisplayed()
+        composeRule.onNodeWithText("META ATINGIDA").performScrollTo().assertIsDisplayed()
+
+        val alertEntity = createdAlerts.first()
+        val dispatched = com.example.notifications.PriceAlertNotificationHelper.sendPriceTargetNotification(
+            context = context,
+            alert = alertEntity,
+            currentPriceBrl = 59.50,
+            sourceLabel = "B3 Oficial"
+        )
+        org.junit.Assert.assertTrue(dispatched)
+
+        val nm = context.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        val shadowNm = org.robolectric.Shadows.shadowOf(nm)
+        org.junit.Assert.assertTrue(shadowNm.allNotifications.isNotEmpty())
+        val postedTitle = shadowNm.allNotifications.first().extras
+            .getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString().orEmpty()
+        org.junit.Assert.assertTrue(postedTitle.contains("Meta atingida"))
+    }
 }
+
 
 

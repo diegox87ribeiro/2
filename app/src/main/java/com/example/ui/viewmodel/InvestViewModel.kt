@@ -13,6 +13,7 @@ import com.example.data.local.ImportHistoryEntity
 import com.example.data.local.InvestDatabase
 import com.example.data.local.PortfolioOperationEntity
 import com.example.data.local.PreferencesManager
+import com.example.data.local.PriceTargetAlertEntity
 import com.example.data.local.SavedAiRecommendationEntity
 import com.example.data.local.StrategyChangeLogEntity
 import com.example.data.local.StrategyCriteriaEntity
@@ -38,8 +39,12 @@ import com.example.domain.model.MarketAsset
 import com.example.domain.model.OperationType
 import com.example.domain.model.PortfolioItemView
 import com.example.domain.model.PortfolioType
+import com.example.domain.model.PriceAlertCondition
+import com.example.domain.model.PriceTargetEvaluator
 import com.example.domain.model.ProfitChartConnectionState
 import com.example.domain.model.SimulationScenarioResult
+import com.example.notifications.PriceAlertNotificationHelper
+import com.example.notifications.PriceAlertWorkScheduler
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -76,7 +81,9 @@ data class InvestDashboardState(
     val liveQuotesByTicker: Map<String, LiveMarketQuote> = emptyMap(),
     val liveLookupState: LiveQuoteLookupState = LiveQuoteLookupState.Idle,
     val isLiveBatchRefreshing: Boolean = false,
-    val profitConnectionState: ProfitChartConnectionState = ProfitChartConnectionState.Disconnected
+    val profitConnectionState: ProfitChartConnectionState = ProfitChartConnectionState.Disconnected,
+    val priceTargetAlerts: List<PriceTargetAlertEntity> = emptyList(),
+    val isCheckingPriceAlerts: Boolean = false
 )
 
 class InvestViewModel(application: Application) : AndroidViewModel(application) {
@@ -95,6 +102,7 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
     private val _liveQuotesByTicker = MutableStateFlow<Map<String, LiveMarketQuote>>(emptyMap())
     private val _liveLookupState = MutableStateFlow<LiveQuoteLookupState>(LiveQuoteLookupState.Idle)
     private val _isLiveBatchRefreshing = MutableStateFlow(false)
+    private val _isCheckingPriceAlerts = MutableStateFlow(false)
     private val _profitConnectionState = MutableStateFlow<ProfitChartConnectionState>(ProfitChartConnectionState.Disconnected)
     private var profitPollingJob: Job? = null
 
@@ -119,7 +127,9 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         _liveQuotesByTicker,
         _liveLookupState,
         _isLiveBatchRefreshing,
-        _profitConnectionState
+        _profitConnectionState,
+        repository.priceTargetAlertsFlow,
+        _isCheckingPriceAlerts
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         val positions = values[0] as List<PortfolioItemView>
@@ -140,6 +150,9 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         val lookupState = values[9] as LiveQuoteLookupState
         val batchRefreshing = values[10] as Boolean
         val profitState = values[11] as ProfitChartConnectionState
+        @Suppress("UNCHECKED_CAST")
+        val alerts = values[12] as List<PriceTargetAlertEntity>
+        val checkingAlerts = values[13] as Boolean
 
         val realPos = positions.filter { it.portfolioType == PortfolioType.REAL }
         val simPos = positions.filter { it.portfolioType == PortfolioType.SIMULATION }
@@ -174,7 +187,9 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
             liveQuotesByTicker = liveQuotes,
             liveLookupState = lookupState,
             isLiveBatchRefreshing = batchRefreshing,
-            profitConnectionState = profitState
+            profitConnectionState = profitState,
+            priceTargetAlerts = alerts,
+            isCheckingPriceAlerts = checkingAlerts
         )
     }.stateIn(
         scope = viewModelScope,
@@ -210,6 +225,14 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                             }
                         }
                     }
+                }
+        }
+        viewModelScope.launch {
+            repository.priceTargetAlertsFlow
+                .map { alerts -> alerts.any { it.isEnabled && !it.hasTriggered } }
+                .distinctUntilChanged()
+                .collect { hasActive ->
+                    PriceAlertWorkScheduler.syncSchedule(getApplication(), hasActive)
                 }
         }
     }
@@ -521,6 +544,7 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
             result.onSuccess { quote ->
                 _liveQuotesByTicker.value = _liveQuotesByTicker.value + (quote.ticker to quote)
                 _liveLookupState.value = LiveQuoteLookupState.Success(quote)
+                evaluateLiveQuotesAgainstAlerts(mapOf(quote.ticker.uppercase() to quote), notifyIfNoneTriggered = false)
             }.onFailure { err ->
                 _liveLookupState.value = LiveQuoteLookupState.Error(
                     ticker = ticker,
@@ -541,6 +565,7 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                 val fetched = liveMarketRepository.fetchBatchQuotes(clean)
                 if (fetched.isNotEmpty()) {
                     _liveQuotesByTicker.value = _liveQuotesByTicker.value + fetched
+                    evaluateLiveQuotesAgainstAlerts(fetched, notifyIfNoneTriggered = false)
                     _statusBannerMessage.value = "${fetched.size} ativo(s) atualizado(s) em tempo real (B3 / Mercado)."
                 } else {
                     _statusBannerMessage.value = "Nenhuma cotação ao vivo pôde ser obtida. Verifique a conexão com a internet."
@@ -661,6 +686,134 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
             _profitConnectionState.value = ProfitChartConnectionState.Error(msg)
             prefsManager.updateProfitSyncStatus(System.currentTimeMillis(), msg)
             if (notifyBanner) _statusBannerMessage.value = msg
+        }
+    }
+
+    fun addPriceTargetAlert(
+        rawTicker: String,
+        targetPriceBrl: Double,
+        condition: PriceAlertCondition,
+        notes: String
+    ) {
+        val ticker = LiveQuoteParsers.normalizeTicker(rawTicker)
+        if (ticker.length < 4 || targetPriceBrl <= 0.0) {
+            _statusBannerMessage.value = "Informe um ticker válido e uma meta de preço maior que zero."
+            return
+        }
+        viewModelScope.launch {
+            val insertedId = withContext(Dispatchers.IO) {
+                repository.insertPriceTargetAlert(
+                    PriceTargetAlertEntity(
+                        ticker = ticker,
+                        targetPriceBrl = targetPriceBrl,
+                        condition = condition.code,
+                        isEnabled = true,
+                        hasTriggered = false,
+                        notes = notes.trim()
+                    )
+                )
+            }
+            PriceAlertWorkScheduler.syncSchedule(getApplication(), hasActiveAlerts = true)
+            _statusBannerMessage.value = "Alerta push criado para $ticker (${condition.shortSymbol} R$ ${"%.2f".format(targetPriceBrl)})."
+
+            val existingLive = _liveQuotesByTicker.value[ticker]
+            if (existingLive != null) {
+                evaluateLiveQuotesAgainstAlerts(mapOf(ticker to existingLive), notifyIfNoneTriggered = false)
+            } else {
+                val liveFetch = liveMarketRepository.fetchLiveQuote(ticker)
+                liveFetch.onSuccess { quote ->
+                    _liveQuotesByTicker.value = _liveQuotesByTicker.value + (quote.ticker to quote)
+                    evaluateLiveQuotesAgainstAlerts(mapOf(quote.ticker.uppercase() to quote), notifyIfNoneTriggered = false)
+                }.onFailure {
+                    // Fallback para avaliação posterior pelo WorkManager periódico se offline
+                    if (insertedId > 0L) {
+                        PriceAlertWorkScheduler.triggerImmediateCheck(getApplication())
+                    }
+                }
+            }
+        }
+    }
+
+    fun togglePriceTargetAlert(id: Long, enabled: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.setPriceTargetAlertEnabled(id, enabled)
+        }
+    }
+
+    fun rearmPriceTargetAlert(id: Long) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                repository.rearmPriceTargetAlert(id)
+            }
+            _statusBannerMessage.value = "Alerta reativado para monitoramento contínuo."
+        }
+    }
+
+    fun deletePriceTargetAlert(id: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.deletePriceTargetAlert(id)
+        }
+    }
+
+    fun checkPriceAlertsNow() {
+        if (_isCheckingPriceAlerts.value) return
+        viewModelScope.launch {
+            _isCheckingPriceAlerts.value = true
+            try {
+                val activeAlerts = withContext(Dispatchers.IO) { repository.getActivePriceTargetAlerts() }
+                if (activeAlerts.isEmpty()) {
+                    _statusBannerMessage.value = "Nenhum alerta ativo para verificar no momento."
+                    return@launch
+                }
+                val tickers = activeAlerts.map { it.ticker.trim().uppercase() }.distinct()
+                val fetched = liveMarketRepository.fetchBatchQuotes(tickers)
+                if (fetched.isEmpty()) {
+                    _statusBannerMessage.value = "Não foi possível consultar cotações ao vivo agora. O monitoramento em segundo plano continua ativo."
+                } else {
+                    _liveQuotesByTicker.value = _liveQuotesByTicker.value + fetched
+                    evaluateLiveQuotesAgainstAlerts(fetched, notifyIfNoneTriggered = true)
+                }
+            } finally {
+                _isCheckingPriceAlerts.value = false
+            }
+        }
+    }
+
+    private suspend fun evaluateLiveQuotesAgainstAlerts(
+        quotes: Map<String, LiveMarketQuote>,
+        notifyIfNoneTriggered: Boolean
+    ) {
+        val activeAlerts = withContext(Dispatchers.IO) { repository.getActivePriceTargetAlerts() }
+        if (activeAlerts.isEmpty()) return
+
+        val now = System.currentTimeMillis()
+        val triggeredList = mutableListOf<String>()
+
+        activeAlerts.forEach { alert ->
+            val key = alert.ticker.trim().uppercase()
+            val quote = quotes[key] ?: return@forEach
+            if (PriceTargetEvaluator.isTargetReached(alert, quote.price)) {
+                PriceAlertNotificationHelper.sendPriceTargetNotification(
+                    context = getApplication(),
+                    alert = alert,
+                    currentPriceBrl = quote.price,
+                    sourceLabel = quote.primarySourceLabel
+                )
+                withContext(Dispatchers.IO) {
+                    repository.markPriceTargetAlertTriggered(alert.id, quote.price, now)
+                }
+                triggeredList.add("$key a R$ ${"%.2f".format(quote.price)}")
+            } else {
+                withContext(Dispatchers.IO) {
+                    repository.updatePriceTargetAlertEvaluated(alert.id, quote.price, now)
+                }
+            }
+        }
+
+        if (triggeredList.isNotEmpty()) {
+            _statusBannerMessage.value = "Meta atingida! Notificação enviada: ${triggeredList.joinToString(", ")}"
+        } else if (notifyIfNoneTriggered) {
+            _statusBannerMessage.value = "Cotações verificadas ao vivo: nenhuma meta atingida ainda."
         }
     }
 }

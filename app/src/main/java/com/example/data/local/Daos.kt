@@ -159,3 +159,55 @@ interface ChatMessageDao {
     suspend fun clearAll()
 }
 
+@Dao
+interface PriceTargetAlertDao {
+    @Query("SELECT * FROM price_target_alerts ORDER BY hasTriggered ASC, createdAt DESC")
+    fun observeAll(): Flow<List<PriceTargetAlertEntity>>
+
+    @Query("SELECT * FROM price_target_alerts WHERE isEnabled = 1 AND hasTriggered = 0")
+    suspend fun getActiveAlerts(): List<PriceTargetAlertEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(alert: PriceTargetAlertEntity): Long
+
+    @Query("UPDATE price_target_alerts SET isEnabled = :enabled WHERE id = :id")
+    suspend fun setEnabled(id: Long, enabled: Boolean)
+
+    @Query(
+        """
+        UPDATE price_target_alerts
+        SET isEnabled = 1,
+            hasTriggered = 0,
+            triggeredAt = NULL
+        WHERE id = :id
+        """
+    )
+    suspend fun rearmAlert(id: Long)
+
+    @Query(
+        """
+        UPDATE price_target_alerts
+        SET hasTriggered = 1,
+            triggeredAt = :triggeredAt,
+            lastEvaluatedPriceBrl = :evaluatedPriceBrl,
+            lastEvaluatedAt = :triggeredAt
+        WHERE id = :id
+        """
+    )
+    suspend fun markTriggered(id: Long, evaluatedPriceBrl: Double, triggeredAt: Long)
+
+    @Query(
+        """
+        UPDATE price_target_alerts
+        SET lastEvaluatedPriceBrl = :evaluatedPriceBrl,
+            lastEvaluatedAt = :evaluatedAt
+        WHERE id = :id
+        """
+    )
+    suspend fun updateLastEvaluated(id: Long, evaluatedPriceBrl: Double, evaluatedAt: Long)
+
+    @Query("DELETE FROM price_target_alerts WHERE id = :id")
+    suspend fun deleteById(id: Long)
+}
+
+

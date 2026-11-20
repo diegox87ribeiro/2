@@ -612,14 +612,24 @@ private fun MainScaffoldBody(
                             onUpdateCriteria = viewModel::updateStrategyCriteria,
                             onQueryLiveQuote = viewModel::queryLiveAssetQuote,
                             onRefreshLiveBatch = viewModel::refreshLiveQuotesForTickers,
-                            onApplyLiveQuoteToPortfolio = viewModel::applyLiveQuoteToPortfolio
+                            onApplyLiveQuoteToPortfolio = viewModel::applyLiveQuoteToPortfolio,
+                            onCreatePriceAlert = viewModel::addPriceTargetAlert,
+                            onTogglePriceAlert = viewModel::togglePriceTargetAlert,
+                            onRearmPriceAlert = viewModel::rearmPriceTargetAlert,
+                            onDeletePriceAlert = viewModel::deletePriceTargetAlert,
+                            onCheckPriceAlertsNow = viewModel::checkPriceAlertsNow
                         )
                     }
                     composable(InvestRoutes.ROUTE_TECNICA) {
                         TechnicalAnalysisScreen(
                             state = state,
                             onQueryLiveQuote = viewModel::queryLiveAssetQuote,
-                            onApplyLiveQuoteToPortfolio = viewModel::applyLiveQuoteToPortfolio
+                            onApplyLiveQuoteToPortfolio = viewModel::applyLiveQuoteToPortfolio,
+                            onCreatePriceAlert = viewModel::addPriceTargetAlert,
+                            onTogglePriceAlert = viewModel::togglePriceTargetAlert,
+                            onRearmPriceAlert = viewModel::rearmPriceTargetAlert,
+                            onDeletePriceAlert = viewModel::deletePriceTargetAlert,
+                            onCheckPriceAlertsNow = viewModel::checkPriceAlertsNow
                         )
                     }
                     composable(InvestRoutes.ROUTE_RISCO_HHI) { RiskHhiScreen(state) }

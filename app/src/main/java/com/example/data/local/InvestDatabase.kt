@@ -16,9 +16,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         StrategyChangeLogEntity::class,
         CryptoVirtualPositionEntity::class,
         SavedAiRecommendationEntity::class,
-        ChatMessageEntity::class
+        ChatMessageEntity::class,
+        PriceTargetAlertEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class InvestDatabase : RoomDatabase() {
@@ -27,6 +28,7 @@ abstract class InvestDatabase : RoomDatabase() {
     abstract fun cryptoVirtualDao(): CryptoVirtualDao
     abstract fun aiRecommendationDao(): AiRecommendationDao
     abstract fun chatMessageDao(): ChatMessageDao
+    abstract fun priceTargetAlertDao(): PriceTargetAlertDao
 
     companion object {
         @Volatile
@@ -68,6 +70,28 @@ abstract class InvestDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS price_target_alerts (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        ticker TEXT NOT NULL,
+                        targetPriceBrl REAL NOT NULL,
+                        condition TEXT NOT NULL DEFAULT 'AT_OR_BELOW',
+                        isEnabled INTEGER NOT NULL DEFAULT 1,
+                        hasTriggered INTEGER NOT NULL DEFAULT 0,
+                        triggeredAt INTEGER,
+                        lastEvaluatedPriceBrl REAL,
+                        lastEvaluatedAt INTEGER,
+                        notes TEXT NOT NULL DEFAULT '',
+                        createdAt INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getInstance(context: Context): InvestDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -75,7 +99,7 @@ abstract class InvestDatabase : RoomDatabase() {
                     InvestDatabase::class.java,
                     "invest_ai_local.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                 INSTANCE = instance

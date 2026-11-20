@@ -675,7 +675,51 @@ class InvestAiCoreTests {
         assertTrue("BBAS3" in relaxedTickers)
         assertFalse("WEGE3" in relaxedTickers)
     }
+
+    @Test
+    fun `price target evaluator triggers AT_OR_BELOW and AT_OR_ABOVE accurately and ignores disabled or already triggered`() {
+        val buyDip = com.example.data.local.PriceTargetAlertEntity(
+            id = 1L,
+            ticker = "VALE3",
+            targetPriceBrl = 60.0,
+            condition = com.example.domain.model.PriceAlertCondition.AT_OR_BELOW.code,
+            isEnabled = true,
+            hasTriggered = false
+        )
+        val takeProfit = com.example.data.local.PriceTargetAlertEntity(
+            id = 2L,
+            ticker = "PETR4",
+            targetPriceBrl = 40.0,
+            condition = com.example.domain.model.PriceAlertCondition.AT_OR_ABOVE.code,
+            isEnabled = true,
+            hasTriggered = false
+        )
+        val alreadyTriggered = buyDip.copy(id = 3L, hasTriggered = true)
+        val paused = takeProfit.copy(id = 4L, isEnabled = false)
+
+        val triggered = com.example.domain.model.PriceTargetEvaluator.evaluateAlerts(
+            alerts = listOf(buyDip, takeProfit, alreadyTriggered, paused),
+            quotesByTicker = mapOf(
+                "VALE3" to (59.80 to "B3 Oficial"),
+                "PETR4" to (40.10 to "Yahoo B3")
+            )
+        )
+
+        assertEquals(2, triggered.size)
+        assertEquals(listOf(1L, 2L), triggered.map { it.alert.id })
+        assertFalse(com.example.domain.model.PriceTargetEvaluator.isTargetReached(buyDip, 61.50))
+        assertFalse(com.example.domain.model.PriceTargetEvaluator.isTargetReached(takeProfit, 39.20))
+        assertEquals(
+            com.example.domain.model.PriceAlertCondition.AT_OR_BELOW,
+            com.example.domain.model.PriceTargetEvaluator.suggestCondition(58.0, 64.0)
+        )
+        assertEquals(
+            com.example.domain.model.PriceAlertCondition.AT_OR_ABOVE,
+            com.example.domain.model.PriceTargetEvaluator.suggestCondition(70.0, 64.0)
+        )
+    }
 }
+
 
 
 
