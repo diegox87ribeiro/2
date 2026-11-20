@@ -33,7 +33,9 @@ data class PortfolioOperationEntity(
     val totalValue: Double,
     val dateIso: String,
     val notes: String,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val externalRefId: String = "",
+    val brokerAccount: String = ""
 )
 
 @Entity(tableName = "import_history")

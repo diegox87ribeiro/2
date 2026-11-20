@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SavedAiRecommendationEntity::class,
         ChatMessageEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class InvestDatabase : RoomDatabase() {
@@ -61,6 +61,13 @@ abstract class InvestDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE portfolio_operations ADD COLUMN externalRefId TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE portfolio_operations ADD COLUMN brokerAccount TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun getInstance(context: Context): InvestDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -68,7 +75,7 @@ abstract class InvestDatabase : RoomDatabase() {
                     InvestDatabase::class.java,
                     "invest_ai_local.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                 INSTANCE = instance

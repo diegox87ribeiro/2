@@ -24,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Shield
@@ -67,23 +68,28 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.example.data.importexport.ImportParseResult
 import com.example.data.local.ImportHistoryEntity
 import com.example.domain.model.AssetClass
 import com.example.domain.model.ConsolidatedExecutiveReport
+import com.example.domain.model.DataComGroup
 import com.example.domain.model.HhiRiskReport
 import com.example.domain.model.PortfolioType
 import com.example.ui.screens.AiAgentsScreen
 import com.example.ui.screens.AssetClassExplorerScreen
 import com.example.ui.screens.CryptoScreen
 import com.example.ui.screens.DashboardScreen
+import com.example.ui.screens.DataComGroupDetailScreen
 import com.example.ui.screens.DividendCalendarScreen
 import com.example.ui.screens.FundamentalAnalysisScreen
 import com.example.ui.screens.PortfolioScreen
+import com.example.ui.screens.ProfitChartSyncScreen
 import com.example.ui.screens.ReportsAndArchitectureScreen
 import com.example.ui.screens.RiskHhiScreen
 import com.example.ui.screens.SimulatorScreen
@@ -137,7 +143,15 @@ fun InvestAppRoot(
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: InvestRoutes.ROUTE_DASHBOARD
-    val currentModule = ALL_INVEST_MODULES.firstOrNull { it.route == currentRoute } ?: ALL_INVEST_MODULES.first()
+    val isDataComGroupRoute = currentRoute == InvestRoutes.ROUTE_DATA_COM_GROUP || currentRoute.startsWith("data_com_grupo/")
+    val activeDataComGroup = DataComGroup.entries.firstOrNull {
+        it.code == navBackStackEntry?.arguments?.getString("groupCode")
+    } ?: DataComGroup.G1
+    val currentModule = if (isDataComGroupRoute) {
+        ALL_INVEST_MODULES.first { it.route == InvestRoutes.ROUTE_CALENDARIO }
+    } else {
+        ALL_INVEST_MODULES.firstOrNull { it.route == currentRoute } ?: ALL_INVEST_MODULES.first()
+    }
 
     val navigateTo: (String) -> Unit = { route ->
         if (route != currentRoute) {
@@ -169,6 +183,8 @@ fun InvestAppRoot(
                 MainScaffoldBody(
                     currentModule = currentModule,
                     currentRoute = currentRoute,
+                    isDataComGroupRoute = isDataComGroupRoute,
+                    activeDataComGroup = activeDataComGroup,
                     showMenuButton = false,
                     showBottomBar = false,
                     showRail = false,
@@ -212,6 +228,8 @@ fun InvestAppRoot(
                 MainScaffoldBody(
                     currentModule = currentModule,
                     currentRoute = currentRoute,
+                    isDataComGroupRoute = isDataComGroupRoute,
+                    activeDataComGroup = activeDataComGroup,
                     showMenuButton = true,
                     showBottomBar = !isMedium,
                     showRail = isMedium,
@@ -309,6 +327,8 @@ private fun InvestSidebarContent(
 private fun MainScaffoldBody(
     currentModule: InvestModuleDest,
     currentRoute: String,
+    isDataComGroupRoute: Boolean,
+    activeDataComGroup: DataComGroup,
     showMenuButton: Boolean,
     showBottomBar: Boolean,
     showRail: Boolean,
@@ -333,7 +353,14 @@ private fun MainScaffoldBody(
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = DeepNavySurface),
                 navigationIcon = {
-                    if (showMenuButton) {
+                    if (isDataComGroupRoute) {
+                        IconButton(
+                            onClick = { navController.popBackStack() },
+                            modifier = Modifier.testTag("topbar_back_button")
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar")
+                        }
+                    } else if (showMenuButton) {
                         IconButton(onClick = onOpenDrawer, modifier = Modifier.testTag("open_drawer_button")) {
                             Icon(Icons.Default.Menu, contentDescription = "Abrir menu de módulos")
                         }
@@ -341,8 +368,13 @@ private fun MainScaffoldBody(
                 },
                 title = {
                     Column {
-                        Text(currentModule.title, style = MaterialTheme.typography.titleMedium)
-                        Text("INVEST AI • Módulo ${currentModule.number}/15", style = MaterialTheme.typography.labelSmall, color = EmeraldPrimary)
+                        if (isDataComGroupRoute) {
+                            Text("Grupo ${activeDataComGroup.code} • Datas-Com", style = MaterialTheme.typography.titleMedium)
+                            Text("${activeDataComGroup.label} • Lista de Ativos", style = MaterialTheme.typography.labelSmall, color = EmeraldPrimary)
+                        } else {
+                            Text(currentModule.title, style = MaterialTheme.typography.titleMedium)
+                            Text("INVEST AI • Módulo ${currentModule.number}/${ALL_INVEST_MODULES.size}", style = MaterialTheme.typography.labelSmall, color = EmeraldPrimary)
+                        }
                     }
                 },
                 actions = {
@@ -416,7 +448,18 @@ private fun MainScaffoldBody(
                             slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.End, tween(220, easing = FastOutSlowInEasing)) { it / 10 }
                     }
                 ) {
-                    composable(InvestRoutes.ROUTE_DASHBOARD) { DashboardScreen(state, onNavigate, viewModel::loadDemoRealPortfolio) }
+                    composable(InvestRoutes.ROUTE_DASHBOARD) {
+                        DashboardScreen(
+                            state = state,
+                            onNavigate = onNavigate,
+                            onLoadDemoPortfolio = viewModel::loadDemoRealPortfolio,
+                            onOpenDataComGroup = { grp ->
+                                navController.navigate(InvestRoutes.dataComGroupRoute(grp)) {
+                                    launchSingleTop = true
+                                }
+                            }
+                        )
+                    }
                     composable(InvestRoutes.ROUTE_CARTEIRA) {
                         PortfolioScreen(
                             state = state, selectedType = selectedPortfolioType, importFeedback = importFeedback, pendingImportPreview = pendingImportPreview,
@@ -425,19 +468,99 @@ private fun MainScaffoldBody(
                             onDismissImportFeedback = viewModel::clearImportFeedback, onBuildTemplateCsv = viewModel::buildStandardCsvTemplate,
                             onBuildPortfolioCsv = viewModel::buildPortfolioCsvExport, onNotify = viewModel::notifyMessage,
                             onLoadDemoReal = viewModel::loadDemoRealPortfolio, onClearPortfolio = viewModel::clearPortfolio,
-                            onAddManualPosition = viewModel::addManualPosition, onRecordOperation = viewModel::recordOperation,
-                            onDeletePosition = viewModel::deletePosition, onUpdateCash = viewModel::updateCashBalance
+                            onAddManualPosition = viewModel::addManualPosition, onUpdatePosition = viewModel::updatePosition,
+                            onRecordOperation = viewModel::recordOperation,
+                            onDeletePosition = viewModel::deletePosition, onUpdateCash = viewModel::updateCashBalance,
+                            onOpenProfitChart = { onNavigate(InvestRoutes.ROUTE_PROFITCHART) }
                         )
                     }
-                    composable(InvestRoutes.ROUTE_ACOES_BR) { AssetClassExplorerScreen(AssetClass.ACOES_BR, state.marketAssets) }
-                    composable(InvestRoutes.ROUTE_FIIS) { AssetClassExplorerScreen(AssetClass.FII, state.marketAssets) }
-                    composable(InvestRoutes.ROUTE_FIAGROS) { AssetClassExplorerScreen(AssetClass.FIAGRO, state.marketAssets) }
-                    composable(InvestRoutes.ROUTE_ETFS) { AssetClassExplorerScreen(AssetClass.ETF, state.marketAssets) }
+                    composable(InvestRoutes.ROUTE_ACOES_BR) {
+                        AssetClassExplorerScreen(
+                            assetClass = AssetClass.ACOES_BR,
+                            allAssets = state.marketAssets,
+                            liveLookupState = state.liveLookupState,
+                            isLiveBatchRefreshing = state.isLiveBatchRefreshing,
+                            onRefreshLiveAssets = viewModel::refreshLiveQuotesForTickers,
+                            onQueryLiveQuote = viewModel::queryLiveAssetQuote
+                        )
+                    }
+                    composable(InvestRoutes.ROUTE_FIIS) {
+                        AssetClassExplorerScreen(
+                            assetClass = AssetClass.FII,
+                            allAssets = state.marketAssets,
+                            liveLookupState = state.liveLookupState,
+                            isLiveBatchRefreshing = state.isLiveBatchRefreshing,
+                            onRefreshLiveAssets = viewModel::refreshLiveQuotesForTickers,
+                            onQueryLiveQuote = viewModel::queryLiveAssetQuote
+                        )
+                    }
+                    composable(InvestRoutes.ROUTE_FIAGROS) {
+                        AssetClassExplorerScreen(
+                            assetClass = AssetClass.FIAGRO,
+                            allAssets = state.marketAssets,
+                            liveLookupState = state.liveLookupState,
+                            isLiveBatchRefreshing = state.isLiveBatchRefreshing,
+                            onRefreshLiveAssets = viewModel::refreshLiveQuotesForTickers,
+                            onQueryLiveQuote = viewModel::queryLiveAssetQuote
+                        )
+                    }
+                    composable(InvestRoutes.ROUTE_ETFS) {
+                        AssetClassExplorerScreen(
+                            assetClass = AssetClass.ETF,
+                            allAssets = state.marketAssets,
+                            liveLookupState = state.liveLookupState,
+                            isLiveBatchRefreshing = state.isLiveBatchRefreshing,
+                            onRefreshLiveAssets = viewModel::refreshLiveQuotesForTickers,
+                            onQueryLiveQuote = viewModel::queryLiveAssetQuote
+                        )
+                    }
                     composable(InvestRoutes.ROUTE_RENDA_FIXA) { AssetClassExplorerScreen(AssetClass.RENDA_FIXA, state.marketAssets) }
                     composable(InvestRoutes.ROUTE_CRIPTO) { CryptoScreen(state, viewModel::updateCryptoAllocations, viewModel::resetCryptoWallet) }
-                    composable(InvestRoutes.ROUTE_CALENDARIO) { DividendCalendarScreen(state) }
-                    composable(InvestRoutes.ROUTE_FUNDAMENTALISTA) { FundamentalAnalysisScreen(state, viewModel::updateStrategyCriteria) }
-                    composable(InvestRoutes.ROUTE_TECNICA) { TechnicalAnalysisScreen(state) }
+                    composable(InvestRoutes.ROUTE_CALENDARIO) {
+                        DividendCalendarScreen(
+                            state = state,
+                            onOpenDataComGroup = { grp ->
+                                navController.navigate(InvestRoutes.dataComGroupRoute(grp)) {
+                                    launchSingleTop = true
+                                }
+                            }
+                        )
+                    }
+                    composable(
+                        route = InvestRoutes.ROUTE_DATA_COM_GROUP,
+                        arguments = listOf(navArgument("groupCode") { type = NavType.StringType })
+                    ) { backStackEntry ->
+                        val code = backStackEntry.arguments?.getString("groupCode")
+                        val grp = DataComGroup.entries.firstOrNull { it.code == code } ?: DataComGroup.G1
+                        DataComGroupDetailScreen(
+                            group = grp,
+                            state = state,
+                            onSelectGroup = { nextGrp ->
+                                navController.navigate(InvestRoutes.dataComGroupRoute(nextGrp)) {
+                                    popUpTo(InvestRoutes.ROUTE_DATA_COM_GROUP) { inclusive = true }
+                                    launchSingleTop = true
+                                }
+                            },
+                            onBack = { navController.popBackStack() },
+                            onOpenCarteira = { onNavigate(InvestRoutes.ROUTE_CARTEIRA) }
+                        )
+                    }
+                    composable(InvestRoutes.ROUTE_FUNDAMENTALISTA) {
+                        FundamentalAnalysisScreen(
+                            state = state,
+                            onUpdateCriteria = viewModel::updateStrategyCriteria,
+                            onQueryLiveQuote = viewModel::queryLiveAssetQuote,
+                            onRefreshLiveBatch = viewModel::refreshLiveQuotesForTickers,
+                            onApplyLiveQuoteToPortfolio = viewModel::applyLiveQuoteToPortfolio
+                        )
+                    }
+                    composable(InvestRoutes.ROUTE_TECNICA) {
+                        TechnicalAnalysisScreen(
+                            state = state,
+                            onQueryLiveQuote = viewModel::queryLiveAssetQuote,
+                            onApplyLiveQuoteToPortfolio = viewModel::applyLiveQuoteToPortfolio
+                        )
+                    }
                     composable(InvestRoutes.ROUTE_RISCO_HHI) { RiskHhiScreen(state) }
                     composable(InvestRoutes.ROUTE_SIMULADOR) { SimulatorScreen(state, viewModel::simulatePortfolioScenario) }
                     composable(InvestRoutes.ROUTE_OPORTUNIDADES_IA) {
@@ -452,6 +575,15 @@ private fun MainScaffoldBody(
                             cloudReportsUiState = cloudReportsUiState,
                             isCloudSyncing = isCloudSyncing,
                             onSyncConsolidatedReport = onSyncConsolidatedReport
+                        )
+                    }
+                    composable(InvestRoutes.ROUTE_PROFITCHART) {
+                        ProfitChartSyncScreen(
+                            state = state,
+                            onConnectAndSync = viewModel::connectAndSyncProfitChart,
+                            onSyncNow = viewModel::syncProfitChartNow,
+                            onImportExportedFile = viewModel::importProfitChartFile,
+                            onDisconnect = viewModel::disconnectProfitChart
                         )
                     }
                 }

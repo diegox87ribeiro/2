@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -16,7 +17,13 @@ data class AppPreferencesState(
     val cashSimBrl: Double = 25000.0,
     val aiPortfolioConsentGranted: Boolean = false,
     val supabaseEndpointConfigured: String = "",
-    val githubRepoConfigured: String = ""
+    val githubRepoConfigured: String = "",
+    val profitEndpointUrl: String = "",
+    val profitAuthToken: String = "",
+    val profitAutoSyncEnabled: Boolean = false,
+    val profitApplyToPositions: Boolean = true,
+    val profitLastSyncEpochMs: Long = 0L,
+    val profitLastStatusMessage: String = ""
 )
 
 class PreferencesManager(private val context: Context) {
@@ -26,6 +33,12 @@ class PreferencesManager(private val context: Context) {
         val AI_CONSENT = booleanPreferencesKey("ai_portfolio_consent")
         val SUPABASE_URL = stringPreferencesKey("supabase_endpoint")
         val GITHUB_REPO = stringPreferencesKey("github_repo")
+        val PROFIT_ENDPOINT_URL = stringPreferencesKey("profit_endpoint_url")
+        val PROFIT_AUTH_TOKEN = stringPreferencesKey("profit_auth_token")
+        val PROFIT_AUTO_SYNC = booleanPreferencesKey("profit_auto_sync")
+        val PROFIT_APPLY_POSITIONS = booleanPreferencesKey("profit_apply_positions")
+        val PROFIT_LAST_SYNC_MS = longPreferencesKey("profit_last_sync_ms")
+        val PROFIT_LAST_STATUS = stringPreferencesKey("profit_last_status")
     }
 
     val preferencesFlow: Flow<AppPreferencesState> = context.investPrefsDataStore.data.map { prefs ->
@@ -34,7 +47,13 @@ class PreferencesManager(private val context: Context) {
             cashSimBrl = prefs[Keys.CASH_SIM] ?: 25000.0,
             aiPortfolioConsentGranted = prefs[Keys.AI_CONSENT] ?: false,
             supabaseEndpointConfigured = prefs[Keys.SUPABASE_URL] ?: "",
-            githubRepoConfigured = prefs[Keys.GITHUB_REPO] ?: ""
+            githubRepoConfigured = prefs[Keys.GITHUB_REPO] ?: "",
+            profitEndpointUrl = prefs[Keys.PROFIT_ENDPOINT_URL] ?: "",
+            profitAuthToken = prefs[Keys.PROFIT_AUTH_TOKEN] ?: "",
+            profitAutoSyncEnabled = prefs[Keys.PROFIT_AUTO_SYNC] ?: false,
+            profitApplyToPositions = prefs[Keys.PROFIT_APPLY_POSITIONS] ?: true,
+            profitLastSyncEpochMs = prefs[Keys.PROFIT_LAST_SYNC_MS] ?: 0L,
+            profitLastStatusMessage = prefs[Keys.PROFIT_LAST_STATUS] ?: ""
         )
     }
 
@@ -54,6 +73,34 @@ class PreferencesManager(private val context: Context) {
         context.investPrefsDataStore.edit {
             it[Keys.SUPABASE_URL] = supabaseUrl.trim()
             it[Keys.GITHUB_REPO] = githubRepo.trim()
+        }
+    }
+
+    suspend fun saveProfitChartConfig(
+        endpointUrl: String,
+        authToken: String,
+        autoSyncEnabled: Boolean,
+        applyToPositions: Boolean
+    ) {
+        context.investPrefsDataStore.edit {
+            it[Keys.PROFIT_ENDPOINT_URL] = endpointUrl.trim()
+            it[Keys.PROFIT_AUTH_TOKEN] = authToken.trim()
+            it[Keys.PROFIT_AUTO_SYNC] = autoSyncEnabled
+            it[Keys.PROFIT_APPLY_POSITIONS] = applyToPositions
+        }
+    }
+
+    suspend fun updateProfitSyncStatus(epochMs: Long, statusMessage: String) {
+        context.investPrefsDataStore.edit {
+            it[Keys.PROFIT_LAST_SYNC_MS] = epochMs
+            it[Keys.PROFIT_LAST_STATUS] = statusMessage
+        }
+    }
+
+    suspend fun disconnectProfitChart() {
+        context.investPrefsDataStore.edit {
+            it[Keys.PROFIT_AUTO_SYNC] = false
+            it[Keys.PROFIT_LAST_STATUS] = "Desconectado manualmente"
         }
     }
 }

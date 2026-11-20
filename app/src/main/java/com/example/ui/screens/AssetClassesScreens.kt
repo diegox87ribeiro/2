@@ -10,13 +10,19 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -30,9 +36,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.domain.model.AssetClass
 import com.example.domain.model.DataComGroup
+import com.example.domain.model.LiveQuoteLookupState
 import com.example.domain.model.MarketAsset
 import com.example.ui.components.AssetDetailSheetContent
 import com.example.ui.components.DataDisclaimerBanner
@@ -44,6 +52,7 @@ import com.example.ui.components.formatPct
 import com.example.ui.theme.AmberGold
 import com.example.ui.theme.CoralRed
 import com.example.ui.theme.ElectricCyan
+import com.example.ui.theme.EmeraldOnPrimary
 import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.MonoValueStyle
 import com.example.ui.theme.TextSecondary
@@ -52,12 +61,16 @@ import com.example.ui.theme.TextSecondary
 @Composable
 fun AssetClassExplorerScreen(
     assetClass: AssetClass,
-    allAssets: List<MarketAsset>
+    allAssets: List<MarketAsset>,
+    liveLookupState: LiveQuoteLookupState = LiveQuoteLookupState.Idle,
+    isLiveBatchRefreshing: Boolean = false,
+    onRefreshLiveAssets: (List<String>) -> Unit = {},
+    onQueryLiveQuote: (String) -> Unit = {}
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var selectedGroup by remember { mutableStateOf<DataComGroup?>(null) }
     var sortKey by remember { mutableStateOf("DY") }
-    var selectedAsset by remember { mutableStateOf<MarketAsset?>(null) }
+    var selectedTicker by remember { mutableStateOf<String?>(null) }
 
     val baseAssets = remember(allAssets, assetClass) {
         allAssets.filter { it.assetClass == assetClass }
@@ -83,6 +96,10 @@ fun AssetClassExplorerScreen(
             }
     }
 
+    val selectedAsset = selectedTicker?.let { ticker ->
+        allAssets.firstOrNull { it.ticker.equals(ticker, ignoreCase = true) }
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -90,9 +107,37 @@ fun AssetClassExplorerScreen(
     ) {
         item {
             DataDisclaimerBanner(
-                text = "Base demonstrativa (${assetClass.label}) referenciada em B3, CVM, BCB e ANBIMA. Os valores exibidos são fictícios para análise estrutural.",
+                text = if (assetClass == AssetClass.RENDA_FIXA) {
+                    "Títulos públicos e privados (${assetClass.label}) referenciados em Tesouro Direto, BCB e ANBIMA."
+                } else {
+                    "Explore ${assetClass.label} e atualize cotações em tempo real via B3, ADVFN e Yahoo Finance (.SA). Toque em qualquer ativo para consultar ao vivo."
+                },
                 isWarning = false
             )
+        }
+
+        if (assetClass != AssetClass.RENDA_FIXA && filtered.isNotEmpty()) {
+            item {
+                Button(
+                    onClick = { onRefreshLiveAssets(filtered.map { it.ticker }) },
+                    enabled = !isLiveBatchRefreshing,
+                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary, contentColor = EmeraldOnPrimary),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("explorer_refresh_live_button")
+                ) {
+                    if (isLiveBatchRefreshing) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = EmeraldOnPrimary)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Consultando B3 / ADVFN em tempo real...")
+                    } else {
+                        Icon(Icons.Default.CloudSync, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Atualizar Cotações em Tempo Real (B3 / ADVFN)")
+                    }
+                }
+            }
         }
 
         item {
@@ -138,7 +183,12 @@ fun AssetClassExplorerScreen(
 
         items(filtered, key = { it.ticker }) { asset ->
             FintechCard(
-                modifier = Modifier.clickable { selectedAsset = asset }
+                modifier = Modifier.clickable {
+                    selectedTicker = asset.ticker
+                    if (assetClass != AssetClass.RENDA_FIXA) {
+                        onQueryLiveQuote(asset.ticker)
+                    }
+                }
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -150,6 +200,10 @@ fun AssetClassExplorerScreen(
                             Text(asset.ticker, style = MaterialTheme.typography.titleMedium, color = EmeraldPrimary)
                             Spacer(Modifier.width(8.dp))
                             GroupBadge(asset.dataComGroup)
+                            if (!asset.isDemoData) {
+                                Spacer(Modifier.width(8.dp))
+                                Text("AO VIVO", style = MaterialTheme.typography.labelSmall, color = ElectricCyan)
+                            }
                         }
                         Text(asset.name, style = MaterialTheme.typography.bodyMedium)
                         Text("${asset.sector} • ${asset.sourceLabel}", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
@@ -198,8 +252,14 @@ fun AssetClassExplorerScreen(
     }
 
     selectedAsset?.let { asset ->
-        ModalBottomSheet(onDismissRequest = { selectedAsset = null }) {
-            AssetDetailSheetContent(asset)
+        val isLoadingSheet = liveLookupState is LiveQuoteLookupState.Loading &&
+            liveLookupState.ticker.equals(asset.ticker, ignoreCase = true)
+        ModalBottomSheet(onDismissRequest = { selectedTicker = null }) {
+            AssetDetailSheetContent(
+                asset = asset,
+                onQueryLiveQuote = if (assetClass != AssetClass.RENDA_FIXA) onQueryLiveQuote else null,
+                isLiveLoading = isLoadingSheet
+            )
         }
     }
 }

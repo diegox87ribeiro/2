@@ -232,6 +232,167 @@ class PortfolioRepository(
         )
     }
 
+    suspend fun syncProfitChartExecutions(
+        executions: List<com.example.domain.model.ProfitChartExecution>,
+        skippedNonExecutedCount: Int,
+        applyToPositions: Boolean
+    ): com.example.domain.model.ProfitChartSyncSummary {
+        val now = System.currentTimeMillis()
+        if (executions.isEmpty()) {
+            val msg = if (skippedNonExecutedCount > 0) {
+                "Nenhuma ordem executada nova ($skippedNonExecutedCount ordem(ns) não executada(s) ignorada(s))."
+            } else {
+                "Nenhuma operação executada encontrada na resposta do ProfitChart."
+            }
+            prefs.updateProfitSyncStatus(now, msg)
+            return com.example.domain.model.ProfitChartSyncSummary(
+                totalReceived = 0,
+                newImportedCount = 0,
+                skippedDuplicatesCount = 0,
+                skippedNonExecutedCount = skippedNonExecutedCount,
+                updatedPositionsCount = 0,
+                syncedAtMillis = now,
+                message = msg
+            )
+        }
+
+        val existingRefs = portfolioDao.getExistingExternalRefIds().toHashSet()
+        val newExecutions = executions.filter { it.externalRefId !in existingRefs }
+        val duplicates = executions.size - newExecutions.size
+
+        if (newExecutions.isNotEmpty()) {
+            val opEntities = newExecutions.map { exec ->
+                val brokerPrefix = if (exec.brokerAccount.isNotBlank()) "${exec.brokerAccount} • " else ""
+                PortfolioOperationEntity(
+                    portfolioType = PortfolioType.REAL.name,
+                    ticker = exec.ticker,
+                    operationType = exec.operationType.name,
+                    quantity = exec.quantity,
+                    unitPrice = exec.unitPrice,
+                    totalValue = exec.totalValue,
+                    dateIso = exec.executedAtLabel,
+                    notes = "$brokerPrefix${exec.sourceChannel} (${exec.statusLabel})",
+                    externalRefId = exec.externalRefId,
+                    brokerAccount = exec.brokerAccount
+                )
+            }
+            portfolioDao.insertOperations(opEntities)
+        }
+
+        var updatedPositionsCount = 0
+        if (applyToPositions && newExecutions.isNotEmpty()) {
+            val currentReal = portfolioDao.getPositionsByType(PortfolioType.REAL.name)
+                .associateBy { it.ticker.uppercase() }
+                .toMutableMap()
+
+            for (exec in newExecutions) {
+                val existing = currentReal[exec.ticker.uppercase()]
+                when (exec.operationType) {
+                    OperationType.COMPRA -> {
+                        if (existing == null) {
+                            val assetClass = LiveQuoteParsers.inferAssetClassFromTicker(exec.ticker)
+                            val inserted = PortfolioPositionEntity(
+                                portfolioType = PortfolioType.REAL.name,
+                                ticker = exec.ticker,
+                                name = exec.ticker,
+                                assetClass = assetClass.name,
+                                quantity = exec.quantity,
+                                averagePrice = exec.unitPrice,
+                                currentPrice = exec.unitPrice,
+                                hasMarketPrice = true,
+                                sector = assetClass.shortLabel,
+                                dataComDay = null,
+                                dataSourceLabel = "ProfitChart (${exec.brokerAccount.ifBlank { "Execução" }})",
+                                isDemo = false
+                            )
+                            val newId = portfolioDao.insertPosition(inserted)
+                            currentReal[exec.ticker.uppercase()] = inserted.copy(id = newId)
+                        } else {
+                            val totalQty = existing.quantity + exec.quantity
+                            val weightedAvg = if (totalQty > 0.0) {
+                                ((existing.quantity * existing.averagePrice) + (exec.quantity * exec.unitPrice)) / totalQty
+                            } else {
+                                exec.unitPrice
+                            }
+                            portfolioDao.updatePositionById(
+                                id = existing.id,
+                                ticker = existing.ticker,
+                                name = existing.name,
+                                assetClass = existing.assetClass,
+                                quantity = totalQty,
+                                averagePrice = weightedAvg,
+                                currentPrice = exec.unitPrice,
+                                hasMarketPrice = true,
+                                sector = existing.sector,
+                                dataComDay = existing.dataComDay,
+                                dataSourceLabel = "ProfitChart Sync",
+                                updatedAt = now
+                            )
+                            currentReal[exec.ticker.uppercase()] = existing.copy(
+                                quantity = totalQty,
+                                averagePrice = weightedAvg,
+                                currentPrice = exec.unitPrice,
+                                hasMarketPrice = true
+                            )
+                        }
+                        updatedPositionsCount++
+                    }
+
+                    OperationType.VENDA -> {
+                        if (existing != null) {
+                            val remainingQty = (existing.quantity - exec.quantity).coerceAtLeast(0.0)
+                            if (remainingQty <= 0.0001) {
+                                portfolioDao.deletePositionById(existing.id)
+                                currentReal.remove(exec.ticker.uppercase())
+                            } else {
+                                portfolioDao.updatePositionById(
+                                    id = existing.id,
+                                    ticker = existing.ticker,
+                                    name = existing.name,
+                                    assetClass = existing.assetClass,
+                                    quantity = remainingQty,
+                                    averagePrice = existing.averagePrice,
+                                    currentPrice = exec.unitPrice,
+                                    hasMarketPrice = true,
+                                    sector = existing.sector,
+                                    dataComDay = existing.dataComDay,
+                                    dataSourceLabel = "ProfitChart Sync",
+                                    updatedAt = now
+                                )
+                                currentReal[exec.ticker.uppercase()] = existing.copy(
+                                    quantity = remainingQty,
+                                    currentPrice = exec.unitPrice,
+                                    hasMarketPrice = true
+                                )
+                            }
+                            updatedPositionsCount++
+                        }
+                    }
+
+                    else -> Unit
+                }
+            }
+        }
+
+        val msg = when {
+            newExecutions.isNotEmpty() ->
+                "${newExecutions.size} operação(ões) executada(s) sincronizada(s) do ProfitChart" +
+                    if (updatedPositionsCount > 0) " ($updatedPositionsCount posição(ões) atualizada(s))." else "."
+            else -> "Nenhuma operação nova ($duplicates já sincronizada(s))."
+        }
+        prefs.updateProfitSyncStatus(now, msg)
+
+        return com.example.domain.model.ProfitChartSyncSummary(
+            totalReceived = executions.size,
+            newImportedCount = newExecutions.size,
+            skippedDuplicatesCount = duplicates,
+            skippedNonExecutedCount = skippedNonExecutedCount,
+            updatedPositionsCount = updatedPositionsCount,
+            syncedAtMillis = now,
+            message = msg
+        )
+    }
+
     suspend fun recordOperation(
         portfolioType: PortfolioType,
         ticker: String,
@@ -253,6 +414,50 @@ class PortfolioRepository(
                 dateIso = today,
                 notes = notes
             )
+        )
+    }
+
+    suspend fun updatePosition(
+        id: Long,
+        ticker: String,
+        name: String,
+        assetClass: AssetClass,
+        quantity: Double,
+        averagePrice: Double,
+        currentPrice: Double?,
+        sector: String,
+        dataComDay: Int?,
+        existingSourceLabel: String
+    ) {
+        val cleanTicker = ticker.trim().uppercase()
+        val hasPrice = currentPrice != null && currentPrice > 0.0
+        val updatedSource = when {
+            existingSourceLabel.contains("editado", ignoreCase = true) -> existingSourceLabel
+            existingSourceLabel.isBlank() -> "Edição Manual"
+            else -> "$existingSourceLabel (editado)"
+        }
+        portfolioDao.updatePositionById(
+            id = id,
+            ticker = cleanTicker,
+            name = name.trim().ifBlank { cleanTicker },
+            assetClass = assetClass.name,
+            quantity = quantity,
+            averagePrice = averagePrice,
+            currentPrice = if (hasPrice) currentPrice!! else 0.0,
+            hasMarketPrice = hasPrice,
+            sector = sector.trim().ifBlank { assetClass.shortLabel },
+            dataComDay = dataComDay?.takeIf { it in 1..31 },
+            dataSourceLabel = updatedSource,
+            updatedAt = System.currentTimeMillis()
+        )
+    }
+
+    suspend fun applyLivePriceToPortfolio(ticker: String, livePrice: Double): Int {
+        if (livePrice <= 0.0) return 0
+        return portfolioDao.updateCurrentPriceByTicker(
+            ticker = ticker.trim().uppercase(),
+            currentPrice = livePrice,
+            updatedAt = System.currentTimeMillis()
         )
     }
 

@@ -60,14 +60,15 @@ import com.example.ui.viewmodel.InvestDashboardState
 fun DashboardScreen(
     state: InvestDashboardState,
     onNavigate: (String) -> Unit,
-    onLoadDemoPortfolio: () -> Unit
+    onLoadDemoPortfolio: () -> Unit,
+    onOpenDataComGroup: (DataComGroup) -> Unit = {}
 ) {
     val realHhi = state.realHhi
     val hasRealData = state.realPositions.isNotEmpty()
     val isRealDemo = state.latestRealImport?.isDemoData == true || state.realPositions.any { it.isDemo }
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().testTag("dashboard_lazy_column"),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
@@ -209,21 +210,38 @@ fun DashboardScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Mapa Rápido de Datas-Com (G1–G4)", style = MaterialTheme.typography.titleMedium)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Mapa Rápido de Datas-Com (G1–G4)", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Toque na linha colorida para abrir a lista de ativos do grupo",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                    }
                     Icon(Icons.Default.CalendarMonth, contentDescription = null, tint = EmeraldPrimary)
                 }
-                Spacer(Modifier.height(8.dp))
-                val groupCounts = DataComGroup.entries.map { g ->
-                    val count = state.marketAssets.count { it.dataComGroup == g }.toDouble()
-                    g.label to count
+                Spacer(Modifier.height(10.dp))
+                val groups = DataComGroup.entries
+                val groupCounts = groups.map { g ->
+                    val marketTickers = state.marketAssets.filter { it.dataComGroup == g }.map { it.ticker }
+                    val realTickers = state.realPositions.filter { DataComGroup.fromDay(it.dataComDay) == g }.map { it.ticker }
+                    val distinctCount = (marketTickers + realTickers).distinct().size.toDouble()
+                    g.label to distinctCount
                 }
-                HorizontalBarDistribution(items = groupCounts, unitSuffix = " ativos")
+                HorizontalBarDistribution(
+                    items = groupCounts,
+                    unitSuffix = " ativos",
+                    itemTestTagPrefix = "dashboard_datacom_bar",
+                    onItemClick = { idx, _ ->
+                        groups.getOrNull(idx)?.let(onOpenDataComGroup)
+                    }
+                )
             }
         }
 
         item {
             FintechCard {
-                Text("Todos os 15 Módulos da Plataforma", style = MaterialTheme.typography.titleMedium)
+                Text("Todos os ${ALL_INVEST_MODULES.size} Módulos da Plataforma", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(10.dp))
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),

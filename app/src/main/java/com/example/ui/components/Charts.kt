@@ -13,11 +13,15 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -38,6 +42,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.domain.model.AllocationSlice
 import com.example.domain.model.BenchmarkSeries
@@ -325,24 +330,60 @@ fun InteractiveMultiLineChart(
 fun HorizontalBarDistribution(
     items: List<Pair<String, Double>>,
     unitSuffix: String = "%",
-    accentColor: Color = EmeraldPrimary
+    accentColor: Color = EmeraldPrimary,
+    onItemClick: ((Int, String) -> Unit)? = null,
+    itemTestTagPrefix: String? = null
 ) {
     val maxVal = (items.maxOfOrNull { it.second } ?: 1.0).coerceAtLeast(1.0)
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items.forEachIndexed { idx, (label, value) ->
             val ratio = (value / maxVal).toFloat().coerceIn(0f, 1f)
             val barColor = if (unitSuffix == "%" && value > 20.0) AmberGold else ChartColors[idx % ChartColors.size]
-            Column {
+            val formattedValue = if (unitSuffix.contains("ativo")) {
+                "${value.toInt()}$unitSuffix"
+            } else {
+                "${"%.1f".format(value)}$unitSuffix"
+            }
+            val rowModifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .let { base ->
+                    if (itemTestTagPrefix != null) base.testTag("${itemTestTagPrefix}_$idx") else base
+                }
+                .let { base ->
+                    if (onItemClick != null) {
+                        base
+                            .heightIn(min = 48.dp)
+                            .background(barColor.copy(alpha = 0.08f))
+                            .clickable { onItemClick(idx, label) }
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    } else {
+                        base
+                    }
+                }
+            Column(modifier = rowModifier) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(label, style = MaterialTheme.typography.bodySmall)
-                    Text(
-                        "${"%.1f".format(value)}$unitSuffix",
-                        style = MonoValueStyle.copy(fontSize = MaterialTheme.typography.bodySmall.fontSize),
-                        color = barColor
-                    )
+                    Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            formattedValue,
+                            style = MonoValueStyle.copy(fontSize = MaterialTheme.typography.bodySmall.fontSize),
+                            color = barColor
+                        )
+                        if (onItemClick != null) {
+                            Spacer(Modifier.width(4.dp))
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = "Ver ativos de $label",
+                                tint = barColor,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                 }
                 Spacer(Modifier.height(4.dp))
                 Box(

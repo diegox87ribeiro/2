@@ -1,5 +1,13 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.Surface
+import androidx.compose.ui.draw.clip
+import com.example.ui.theme.EmeraldContainer
+
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +30,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -83,13 +92,27 @@ fun PortfolioScreen(
     onAddManualPosition: (PortfolioType, String, String, AssetClass, Double, Double, Double?, String, Int?) -> Unit,
     onRecordOperation: (PortfolioType, String, OperationType, Double, Double, String) -> Unit,
     onDeletePosition: (Long) -> Unit,
-    onUpdateCash: (PortfolioType, Double) -> Unit
+    onUpdateCash: (PortfolioType, Double) -> Unit,
+    onUpdatePosition: (
+        Long,
+        String,
+        String,
+        AssetClass,
+        Double,
+        Double,
+        Double?,
+        String,
+        Int?,
+        String
+    ) -> Unit = { _, _, _, _, _, _, _, _, _, _ -> },
+    onOpenProfitChart: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var showAddPositionDialog by remember { mutableStateOf(false) }
     var showOperationDialog by remember { mutableStateOf(false) }
     var showCashDialog by remember { mutableStateOf(false) }
     var showSpecDialog by remember { mutableStateOf(false) }
+    var selectedPositionForEdit by remember { mutableStateOf<PortfolioItemView?>(null) }
 
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -148,7 +171,7 @@ fun PortfolioScreen(
         }
 
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().testTag("portfolio_lazy_column"),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
@@ -286,6 +309,18 @@ fun PortfolioScreen(
                         }
                     }
 
+                    if (selectedType == PortfolioType.REAL) {
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = onOpenProfitChart,
+                            modifier = Modifier.fillMaxWidth().testTag("open_profitchart_button")
+                        ) {
+                            Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Conectar ProfitChart (Operações Executadas)")
+                        }
+                    }
+
                     if (activePositions.isNotEmpty()) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
@@ -316,7 +351,11 @@ fun PortfolioScreen(
                 }
             } else {
                 items(activePositions, key = { it.id }) { pos ->
-                    PositionCard(pos = pos, onDelete = { onDeletePosition(pos.id) })
+                    PositionCard(
+                        pos = pos,
+                        onOpenCadastroAndEdit = { selectedPositionForEdit = pos },
+                        onDelete = { onDeletePosition(pos.id) }
+                    )
                 }
             }
 
@@ -423,10 +462,45 @@ fun PortfolioScreen(
             }
         )
     }
+
+    selectedPositionForEdit?.let { editingPos ->
+        val catalogMatch = state.marketAssets.firstOrNull {
+            it.ticker.equals(editingPos.ticker, ignoreCase = true)
+        }
+        AssetPositionDetailAndEditSheet(
+            position = editingPos,
+            catalogAsset = catalogMatch,
+            portfolioTotalInvestedBrl = activeHhi.totalInvestedBrl,
+            onDismiss = { selectedPositionForEdit = null },
+            onSave = { id, ticker, name, assetClass, qty, pm, cur, sector, dataComDay, existingSource ->
+                onUpdatePosition(
+                    id,
+                    ticker,
+                    name,
+                    assetClass,
+                    qty,
+                    pm,
+                    cur,
+                    sector,
+                    dataComDay,
+                    existingSource
+                )
+                selectedPositionForEdit = null
+            },
+            onDelete = { id ->
+                onDeletePosition(id)
+                selectedPositionForEdit = null
+            }
+        )
+    }
 }
 
 @Composable
-private fun PositionCard(pos: PortfolioItemView, onDelete: () -> Unit) {
+private fun PositionCard(
+    pos: PortfolioItemView,
+    onOpenCadastroAndEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
     FintechCard {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -434,11 +508,40 @@ private fun PositionCard(pos: PortfolioItemView, onDelete: () -> Unit) {
             verticalAlignment = Alignment.Top
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    pos.ticker + if (pos.isDemo) " [DEMO]" else "",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = EmeraldPrimary
-                )
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = EmeraldContainer.copy(alpha = 0.45f),
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .testTag("ticker_edit_button_${pos.ticker}")
+                        .clickable { onOpenCadastroAndEdit() }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            pos.ticker + if (pos.isDemo) " [DEMO]" else "",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = EmeraldPrimary
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Icon(
+                            Icons.Default.Edit,
+                            contentDescription = "Acessar cadastro e editar ${pos.ticker}",
+                            tint = EmeraldPrimary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "Cadastro / Editar",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = EmeraldPrimary
+                        )
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
                 Text("${pos.name} • ${pos.assetClass.shortLabel}", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
                 Text("Fonte: ${pos.dataSourceLabel}", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
             }

@@ -12,21 +12,30 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.WarningAmber
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -35,6 +44,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -49,6 +60,7 @@ import com.example.ui.theme.CoralRed
 import com.example.ui.theme.CyanContainer
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.EmeraldContainer
+import com.example.ui.theme.EmeraldOnPrimary
 import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.MonoValueStyle
 import com.example.ui.theme.SubtleBorder
@@ -275,11 +287,18 @@ fun <T> FilterChipBar(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun AssetDetailSheetContent(asset: MarketAsset) {
+fun AssetDetailSheetContent(
+    asset: MarketAsset,
+    onQueryLiveQuote: ((String) -> Unit)? = null,
+    isLiveLoading: Boolean = false
+) {
+    val uriHandler = LocalUriHandler.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
@@ -289,7 +308,24 @@ fun AssetDetailSheetContent(asset: MarketAsset) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(asset.ticker, style = MaterialTheme.typography.headlineSmall, color = EmeraldPrimary)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(asset.ticker, style = MaterialTheme.typography.headlineSmall, color = EmeraldPrimary)
+                    if (!asset.isDemoData) {
+                        Spacer(Modifier.width(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = EmeraldContainer,
+                            border = BorderStroke(1.dp, EmeraldPrimary.copy(alpha = 0.6f))
+                        ) {
+                            Text(
+                                "TEMPO REAL",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = EmeraldPrimary,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
                 Text(asset.name, style = MaterialTheme.typography.titleMedium)
                 Text("${asset.assetClass.label} • ${asset.sector}", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
             }
@@ -304,16 +340,64 @@ fun AssetDetailSheetContent(asset: MarketAsset) {
         }
 
         DataDisclaimerBanner(
-            text = "Fonte: ${asset.sourceLabel} • Data-base: ${asset.dataBaseDate} • Dados de demonstração para análise.",
+            text = if (asset.isDemoData) {
+                "Fonte: ${asset.sourceLabel} • Data-base: ${asset.dataBaseDate} • Dados de catálogo (toque abaixo para consultar ao vivo)."
+            } else {
+                "Fonte em tempo real: ${asset.sourceLabel} • Atualizado em ${asset.dataBaseDate}."
+            },
             isWarning = false
         )
+
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (onQueryLiveQuote != null) {
+                Button(
+                    onClick = { onQueryLiveQuote(asset.ticker) },
+                    enabled = !isLiveLoading,
+                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary, contentColor = EmeraldOnPrimary),
+                    modifier = Modifier.heightIn(min = 48.dp).testTag("sheet_query_live_button")
+                ) {
+                    if (isLiveLoading) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = EmeraldOnPrimary)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Consultando...")
+                    } else {
+                        Icon(Icons.Default.CloudSync, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Consultar Agora")
+                    }
+                }
+            }
+            OutlinedButton(
+                onClick = {
+                    uriHandler.openUri("https://www.b3.com.br/pt_br/market-data-e-indices/servicos-de-dados/market-data/cotacoes/cotacoes/")
+                },
+                modifier = Modifier.heightIn(min = 48.dp)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Site B3")
+            }
+            OutlinedButton(
+                onClick = {
+                    uriHandler.openUri("https://br.advfn.com/p.php?pid=qkquote&symbol=BOV%3A${asset.ticker}")
+                },
+                modifier = Modifier.heightIn(min = 48.dp)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("ADVFN")
+            }
+        }
 
         FintechCard {
             val metrics = listOf(
                 "DY (12m)" to formatPct(asset.dy12m, false),
                 "P/VP" to String.format(ptBrLocale, "%.2fx", asset.pvp),
+                "P/L" to String.format(ptBrLocale, "%.2fx", asset.pl),
                 "Liquidez Diária" to "R$ ${String.format(ptBrLocale, "%.1f", asset.liquidezDiariaMilhoes)}M",
-                "Inadimplência" to formatPct(asset.inadimplenciaPercent, false),
                 "IFR (14)" to String.format(ptBrLocale, "%.1f", asset.rsi14),
                 "Data-Com" to (asset.dataComDay?.let { "Dia $it (${asset.dataComGroup?.code})" } ?: "N/A")
             )

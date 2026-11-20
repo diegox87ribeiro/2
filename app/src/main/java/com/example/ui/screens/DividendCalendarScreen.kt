@@ -37,7 +37,10 @@ import com.example.ui.theme.TextSecondary
 import com.example.ui.viewmodel.InvestDashboardState
 
 @Composable
-fun DividendCalendarScreen(state: InvestDashboardState) {
+fun DividendCalendarScreen(
+    state: InvestDashboardState,
+    onOpenDataComGroup: (DataComGroup) -> Unit = {}
+) {
     var selectedGroup by remember { mutableStateOf<DataComGroup?>(null) }
 
     val dividendAssets = remember(state.marketAssets) {
@@ -80,10 +83,20 @@ fun DividendCalendarScreen(state: InvestDashboardState) {
                     color = EmeraldPrimary
                 )
                 Spacer(Modifier.height(10.dp))
-                val groupCounts = DataComGroup.entries.map { grp ->
-                    grp.label to dividendAssets.count { it.dataComGroup == grp }.toDouble()
+                val groups = DataComGroup.entries
+                val groupCounts = groups.map { grp ->
+                    val marketTickers = dividendAssets.filter { it.dataComGroup == grp }.map { it.ticker }
+                    val realTickers = state.realPositions.filter { DataComGroup.fromDay(it.dataComDay) == grp }.map { it.ticker }
+                    grp.label to (marketTickers + realTickers).distinct().size.toDouble()
                 }
-                HorizontalBarDistribution(items = groupCounts, unitSuffix = " ativos")
+                HorizontalBarDistribution(
+                    items = groupCounts,
+                    unitSuffix = " ativos",
+                    itemTestTagPrefix = "calendar_datacom_bar",
+                    onItemClick = { idx, _ ->
+                        groups.getOrNull(idx)?.let(onOpenDataComGroup)
+                    }
+                )
             }
         }
 

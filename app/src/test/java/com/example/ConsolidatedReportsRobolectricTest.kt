@@ -74,4 +74,146 @@ class ConsolidatedReportsRobolectricTest {
             .performScrollToNode(hasTestTag("sync_report_firestore_button"))
         composeRule.onNodeWithTag("sync_report_firestore_button").assertExists()
     }
+
+    @Test
+    fun `clicking Data-Com colored bar on dashboard opens group asset list screen`() {
+        composeRule.setContent {
+            InvestAiTheme {
+                InvestAppRoot(userDisplayName = "Investidor Teste")
+            }
+        }
+
+        composeRule.onNodeWithTag("dashboard_lazy_column")
+            .performScrollToNode(hasTestTag("dashboard_datacom_bar_0"))
+        composeRule.onNodeWithTag("dashboard_datacom_bar_0").performClick()
+
+        composeRule.onNodeWithText("Grupo G1 • Datas-Com").assertIsDisplayed()
+        composeRule.onNodeWithTag("topbar_back_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("datacom_group_detail_list")
+            .performScrollToNode(hasTestTag("datacom_group_back_button"))
+        composeRule.onNodeWithTag("datacom_group_back_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun `clicking green ticker chip in Portfolio opens asset profile and edit sheet`() {
+        val samplePos = com.example.domain.model.PortfolioItemView(
+            id = 10L,
+            portfolioType = com.example.domain.model.PortfolioType.REAL,
+            ticker = "VALE3",
+            name = "Vale ON",
+            assetClass = com.example.domain.model.AssetClass.ACOES_BR,
+            quantity = 20.0,
+            averagePrice = 66.82,
+            currentPrice = 64.96,
+            sector = "Mineração",
+            dataComDay = 11,
+            dataSourceLabel = "Importação XLSX",
+            isDemo = false,
+            hasMarketPrice = true
+        )
+        val state = com.example.ui.viewmodel.InvestDashboardState(
+            realPositions = listOf(samplePos),
+            realHhi = com.example.domain.model.HhiRiskReport.calculate(listOf(samplePos), 0.0),
+            marketAssets = com.example.data.repository.MarketCatalogRepository.catalogAssets
+        )
+
+        composeRule.setContent {
+            InvestAiTheme {
+                com.example.ui.screens.PortfolioScreen(
+                    state = state,
+                    selectedType = com.example.domain.model.PortfolioType.REAL,
+                    importFeedback = null,
+                    pendingImportPreview = null,
+                    onSelectType = {},
+                    onImportUri = {},
+                    onConfirmPendingImport = {},
+                    onDismissPendingImport = {},
+                    onDismissImportFeedback = {},
+                    onBuildTemplateCsv = { "" },
+                    onBuildPortfolioCsv = { "" },
+                    onNotify = {},
+                    onLoadDemoReal = {},
+                    onClearPortfolio = {},
+                    onAddManualPosition = { _, _, _, _, _, _, _, _, _ -> },
+                    onRecordOperation = { _, _, _, _, _, _ -> },
+                    onDeletePosition = {},
+                    onUpdateCash = { _, _ -> },
+                    onUpdatePosition = { _, _, _, _, _, _, _, _, _, _ -> }
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("portfolio_lazy_column")
+            .performScrollToNode(hasTestTag("ticker_edit_button_VALE3"))
+        composeRule.onNodeWithTag("ticker_edit_button_VALE3").performClick()
+
+        composeRule.onNodeWithText("Cadastro e Edição • VALE3").assertIsDisplayed()
+        composeRule.onNodeWithTag("save_position_edit_button").assertExists()
+    }
+
+    @Test
+    fun `asset analysis screen displays live B3 ADVFN lookup panel and renders live quote result`() {
+        val sampleQuote = com.example.domain.model.LiveMarketQuote(
+            ticker = "VALE3",
+            companyName = "Vale S.A.",
+            price = 65.42,
+            changePercent1d = 1.35,
+            openPrice = 64.50,
+            dayLow = 64.10,
+            dayHigh = 65.80,
+            dailyVolumeBrlMillions = 1250.4,
+            mm9 = 64.90,
+            mm21 = 63.80,
+            rsi14 = 58.2,
+            supportPrice = 62.50,
+            resistancePrice = 66.80,
+            primarySourceLabel = "B3 Oficial + Yahoo Finance (B3 .SA)",
+            consultedSources = listOf("B3 Oficial", "Yahoo Finance (B3 .SA)"),
+            fetchedAtMillis = 1_763_578_800_000L,
+            marketTimestampLabel = "19/11 16:40",
+            b3PageUrl = "https://www.b3.com.br/",
+            advfnPageUrl = "https://br.advfn.com/p.php?pid=qkquote&symbol=BOV%3AVALE3"
+        )
+        val state = com.example.ui.viewmodel.InvestDashboardState(
+            liveLookupState = com.example.domain.model.LiveQuoteLookupState.Success(sampleQuote),
+            liveQuotesByTicker = mapOf("VALE3" to sampleQuote)
+        )
+
+        composeRule.setContent {
+            InvestAiTheme {
+                com.example.ui.screens.FundamentalAnalysisScreen(
+                    state = state,
+                    onUpdateCriteria = { _, _ -> }
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("live_ticker_input").assertIsDisplayed()
+        composeRule.onNodeWithTag("live_lookup_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("live_quote_result_card").assertIsDisplayed()
+        composeRule.onNodeWithTag("open_b3_button").assertExists()
+        composeRule.onNodeWithTag("open_advfn_button").assertExists()
+    }
+
+    @Test
+    fun `navigating from Carteira to ProfitChart screen shows connector and import controls`() {
+        composeRule.setContent {
+            InvestAiTheme {
+                InvestAppRoot(userDisplayName = "Investidor Teste")
+            }
+        }
+
+        composeRule.onNodeWithTag("bottom_nav_carteira").performClick()
+        composeRule.onNodeWithTag("open_profitchart_button").performScrollTo().performClick()
+
+        composeRule.onNodeWithTag("profitchart_lazy_column")
+            .performScrollToNode(hasTestTag("profitchart_endpoint_input"))
+        composeRule.onNodeWithTag("profitchart_endpoint_input").assertExists()
+        composeRule.onNodeWithTag("profitchart_lazy_column")
+            .performScrollToNode(hasTestTag("profitchart_connect_sync_button"))
+        composeRule.onNodeWithTag("profitchart_connect_sync_button").assertExists()
+        composeRule.onNodeWithTag("profitchart_lazy_column")
+            .performScrollToNode(hasTestTag("profitchart_import_file_button"))
+        composeRule.onNodeWithTag("profitchart_import_file_button").assertExists()
+    }
 }

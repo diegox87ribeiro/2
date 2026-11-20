@@ -24,14 +24,70 @@ interface PortfolioDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPosition(item: PortfolioPositionEntity): Long
 
+    @Query(
+        """
+        UPDATE portfolio_positions
+        SET ticker = :ticker,
+            name = :name,
+            assetClass = :assetClass,
+            quantity = :quantity,
+            averagePrice = :averagePrice,
+            currentPrice = :currentPrice,
+            hasMarketPrice = :hasMarketPrice,
+            sector = :sector,
+            dataComDay = :dataComDay,
+            dataSourceLabel = :dataSourceLabel,
+            updatedAt = :updatedAt
+        WHERE id = :id
+        """
+    )
+    suspend fun updatePositionById(
+        id: Long,
+        ticker: String,
+        name: String,
+        assetClass: String,
+        quantity: Double,
+        averagePrice: Double,
+        currentPrice: Double,
+        hasMarketPrice: Boolean,
+        sector: String,
+        dataComDay: Int?,
+        dataSourceLabel: String,
+        updatedAt: Long = System.currentTimeMillis()
+    )
+
+    @Query(
+        """
+        UPDATE portfolio_positions
+        SET currentPrice = :currentPrice,
+            hasMarketPrice = 1,
+            updatedAt = :updatedAt
+        WHERE UPPER(ticker) = UPPER(:ticker)
+        """
+    )
+    suspend fun updateCurrentPriceByTicker(
+        ticker: String,
+        currentPrice: Double,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
     @Query("DELETE FROM portfolio_positions WHERE id = :id")
     suspend fun deletePositionById(id: Long)
 
     @Query("DELETE FROM portfolio_positions WHERE portfolioType = :portfolioType")
     suspend fun clearPositionsByType(portfolioType: String)
 
+    @Query("SELECT * FROM portfolio_positions WHERE portfolioType = :portfolioType")
+    suspend fun getPositionsByType(portfolioType: String): List<PortfolioPositionEntity>
+
+    @Query("SELECT externalRefId FROM portfolio_operations WHERE externalRefId != ''")
+    suspend fun getExistingExternalRefIds(): List<String>
+
     @Insert
     suspend fun insertOperation(op: PortfolioOperationEntity): Long
+
+    @Insert
+    suspend fun insertOperations(ops: List<PortfolioOperationEntity>)
 
     @Query("DELETE FROM portfolio_operations WHERE portfolioType = :portfolioType")
     suspend fun clearOperationsByType(portfolioType: String)

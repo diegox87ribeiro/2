@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.QueryStats
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.ShowChart
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.ui.graphics.vector.ImageVector
 
 object InvestRoutes {
@@ -34,6 +35,11 @@ object InvestRoutes {
     const val ROUTE_SIMULADOR = "simulador_carteira"
     const val ROUTE_OPORTUNIDADES_IA = "oportunidades_ia"
     const val ROUTE_RELATORIOS = "relatorios_gerenciais"
+    const val ROUTE_PROFITCHART = "profitchart_sync"
+    const val ROUTE_DATA_COM_GROUP = "data_com_grupo/{groupCode}"
+
+    fun dataComGroupRoute(group: com.example.domain.model.DataComGroup): String =
+        "data_com_grupo/${group.code}"
 }
 
 enum class ModuleSection(val label: String) {
@@ -70,7 +76,8 @@ val ALL_INVEST_MODULES: List<InvestModuleDest> = listOf(
     InvestModuleDest(InvestRoutes.ROUTE_RISCO_HHI, 12, "Riscos & HHI", "Risco HHI", Icons.Default.Shield, ModuleSection.GESTAO),
     InvestModuleDest(InvestRoutes.ROUTE_SIMULADOR, 13, "Simulador de Carteira", "Simulador", Icons.Default.Science, ModuleSection.GESTAO),
     InvestModuleDest(InvestRoutes.ROUTE_OPORTUNIDADES_IA, 14, "Agentes IA & Sinais", "Agentes IA", Icons.Default.AutoAwesome, ModuleSection.GESTAO),
-    InvestModuleDest(InvestRoutes.ROUTE_RELATORIOS, 15, "Relatórios Gerenciais", "Relatórios", Icons.Default.Assessment, ModuleSection.GESTAO)
+    InvestModuleDest(InvestRoutes.ROUTE_RELATORIOS, 15, "Relatórios Gerenciais", "Relatórios", Icons.Default.Assessment, ModuleSection.GESTAO),
+    InvestModuleDest(InvestRoutes.ROUTE_PROFITCHART, 16, "Conexão ProfitChart", "ProfitChart", Icons.Default.Sync, ModuleSection.GESTAO)
 )
 
 val PRIMARY_NAVIGATION_ROUTES: List<String> = listOf(
