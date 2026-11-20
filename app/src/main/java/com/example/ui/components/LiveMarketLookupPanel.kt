@@ -325,6 +325,10 @@ private fun LiveQuoteResultDetails(
                 if (quote.dayLow != null && quote.dayHigh != null) {
                     add("Mín / Máx Dia" to "${formatBrl(quote.dayLow)} – ${formatBrl(quote.dayHigh)}")
                 }
+                quote.dividendYield12m?.let { add("DY (12m)" to formatPct(it, false)) }
+                quote.priceToBook?.let { add("P/VP" to String.format(ptBr, "%.2fx", it)) }
+                quote.lastDividendBrl?.let { add("Últ. Provento" to formatBrl(it)) }
+                quote.dataComDay?.let { add("Data-Com" to "Dia $it") }
                 quote.dailyVolumeBrlMillions?.let {
                     add("Volume Dia" to "R$ ${String.format(ptBr, "%.1f", it)}M")
                 }

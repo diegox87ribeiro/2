@@ -511,7 +511,8 @@ private fun MainScaffoldBody(
                             onAddManualPosition = viewModel::addManualPosition, onUpdatePosition = viewModel::updatePosition,
                             onRecordOperation = viewModel::recordOperation,
                             onDeletePosition = viewModel::deletePosition, onUpdateCash = viewModel::updateCashBalance,
-                            onOpenProfitChart = { onNavigate(InvestRoutes.ROUTE_PROFITCHART) }
+                            onOpenProfitChart = { onNavigate(InvestRoutes.ROUTE_PROFITCHART) },
+                            onRefreshPortfolioLive = viewModel::refreshAndApplyLiveQuotesForPortfolio
                         )
                     }
                     composable(InvestRoutes.ROUTE_ACOES_BR) {

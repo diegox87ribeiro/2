@@ -127,4 +127,81 @@ class MarketAndProfitParsersRobolectricTest {
         assertEquals("WIZC3", csvOutcome.executions.first().ticker)
         assertEquals(6.45, csvOutcome.executions.first().unitPrice, 0.001)
     }
+
+    @Test
+    fun `live quote parsers extract dividends, DY 12m, PVP and Data-Com from Yahoo events and Investidor10`() {
+        val yahooWithDivs = """
+            {
+              "chart": {
+                "result": [{
+                  "meta": {
+                    "longName": "Maxi Renda FII",
+                    "regularMarketPrice": 9.80,
+                    "regularMarketPreviousClose": 9.75
+                  },
+                  "indicators": { "quote": [{ "close": [9.70, 9.75, 9.80] }] },
+                  "events": {
+                    "dividends": {
+                      "1759287600": { "amount": 0.10, "date": 1759287600 },
+                      "1761966000": { "amount": 0.10, "date": 1761966000 }
+                    }
+                  }
+                }]
+              }
+            }
+        """.trimIndent()
+        val parsedYahoo = LiveQuoteParsers.parseYahooChartJson("MXRF11", yahooWithDivs)!!
+        assertEquals(0.10, parsedYahoo.lastDividendBrl!!, 0.001)
+        assertEquals(listOf(0.10, 0.10), parsedYahoo.dividendHistory6m)
+        assertTrue((parsedYahoo.dividendYield12m ?: 0.0) > 2.0)
+
+        val inv10Html = """
+            <div class="_card"><span class="title">Cotação</span><div class="_card-body"><span class="value">R$ 9,82</span></div></div>
+            <div class="_card"><span class="title">DY (12M)</span><div class="_card-body"><span class="value">12,45%</span></div></div>
+            <div class="_card"><span class="title">P/VP</span><div class="_card-body"><span class="value">1,02</span></div></div>
+            <table>
+              <tr><td>Dividendos</td><td>30/10/26</td><td>16/11/26</td><td>R$ 0,10</td></tr>
+              <tr><td>Dividendos</td><td>30/09/26</td><td>15/10/26</td><td>R$ 0,10</td></tr>
+            </table>
+        """.trimIndent()
+        val parsedInv10 = LiveQuoteParsers.parseInvestidor10Html("MXRF11", inv10Html)!!
+        assertEquals(9.82, parsedInv10.price!!, 0.001)
+        assertEquals(12.45, parsedInv10.dividendYield12m!!, 0.001)
+        assertEquals(1.02, parsedInv10.priceToBook!!, 0.001)
+        assertEquals(0.10, parsedInv10.lastDividendBrl!!, 0.001)
+        assertEquals(30, parsedInv10.dataComDay)
+        assertEquals(16, parsedInv10.paymentDay)
+
+        val catalogMxrf = com.example.data.repository.MarketCatalogRepository.catalogAssets.first { it.ticker == "MXRF11" }
+        assertEquals(30, catalogMxrf.dataComDay)
+        assertEquals(0.10, catalogMxrf.lastDividendBrl, 0.001)
+
+        val liveQuote = com.example.domain.model.LiveMarketQuote(
+            ticker = "MXRF11",
+            companyName = "Maxi Renda FII",
+            price = 9.82,
+            changePercent1d = 0.5,
+            priceToBook = 1.02,
+            dividendYield12m = 12.45,
+            lastDividendBrl = 0.10,
+            dividendHistory6m = listOf(0.10, 0.10, 0.10, 0.10, 0.10, 0.10),
+            dividendConsistencyMonths = 12,
+            dataComDay = 30,
+            paymentDay = 16,
+            primarySourceLabel = "Investidor10 + B3",
+            consultedSources = listOf("Investidor10", "B3"),
+            fetchedAtMillis = 1_763_650_000_000L,
+            marketTimestampLabel = "20/11/2026 14:37",
+            b3PageUrl = "https://www.b3.com.br",
+            advfnPageUrl = "https://br.advfn.com"
+        )
+        val merged = com.example.data.repository.LiveMarketDataRepository.mergeLiveQuoteIntoMarketAsset(catalogMxrf, liveQuote)
+        assertEquals(9.82, merged.price, 0.001)
+        assertEquals(1.02, merged.pvp, 0.001)
+        assertEquals(12.45, merged.dy12m, 0.001)
+        assertEquals(0.10, merged.lastDividendBrl, 0.001)
+        assertEquals(30, merged.dataComDay)
+        assertEquals(16, merged.paymentDay)
+        assertEquals(false, merged.isDemoData)
+    }
 }

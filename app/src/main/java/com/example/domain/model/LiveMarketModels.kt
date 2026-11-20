@@ -16,6 +16,10 @@ enum class MarketQuoteProvider(val displayName: String, val webHomeUrl: String) 
     BRAPI(
         displayName = "Brapi / Dados B3",
         webHomeUrl = "https://brapi.dev"
+    ),
+    INVESTIDOR10(
+        displayName = "Investidor10",
+        webHomeUrl = "https://investidor10.com.br"
     )
 }
 
@@ -43,6 +47,11 @@ data class LiveMarketQuote(
     val dividendYield12m: Double? = null,
     val roePercent: Double? = null,
     val marketCapBrl: Double? = null,
+    val lastDividendBrl: Double? = null,
+    val dividendHistory6m: List<Double> = emptyList(),
+    val dividendConsistencyMonths: Int? = null,
+    val dataComDay: Int? = null,
+    val paymentDay: Int? = null,
     val primarySourceLabel: String,
     val consultedSources: List<String>,
     val fetchedAtMillis: Long,

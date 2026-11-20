@@ -595,6 +595,45 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun refreshAndApplyLiveQuotesForPortfolio(type: PortfolioType) {
+        val positions = if (type == PortfolioType.REAL) {
+            dashboardState.value.realPositions
+        } else {
+            dashboardState.value.simPositions
+        }
+        val tickers = positions
+            .filter { it.assetClass != AssetClass.RENDA_FIXA && it.assetClass != AssetClass.CRIPTO }
+            .map { LiveQuoteParsers.normalizeTicker(it.ticker) }
+            .filter { it.length >= 4 }
+            .distinct()
+        if (tickers.isEmpty() || _isLiveBatchRefreshing.value) return
+        viewModelScope.launch {
+            _isLiveBatchRefreshing.value = true
+            try {
+                val fetched = liveMarketRepository.fetchBatchQuotes(tickers)
+                if (fetched.isNotEmpty()) {
+                    _liveQuotesByTicker.value = _liveQuotesByTicker.value + fetched
+                    var appliedPositions = 0
+                    withContext(Dispatchers.IO) {
+                        fetched.forEach { (ticker, quote) ->
+                            appliedPositions += repository.applyLivePriceToPortfolio(ticker, quote.price)
+                        }
+                    }
+                    evaluateLiveQuotesAgainstAlerts(fetched, notifyIfNoneTriggered = false)
+                    _statusBannerMessage.value = "${fetched.size} ativo(s) consultado(s) ao vivo e $appliedPositions posição(ões) atualizada(s)."
+                } else {
+                    _statusBannerMessage.value = "Nenhuma cotação ao vivo pôde ser obtida. Verifique sua conexão."
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _statusBannerMessage.value = "Falha ao atualizar carteira ao vivo: ${e.localizedMessage ?: "erro de rede"}"
+            } finally {
+                _isLiveBatchRefreshing.value = false
+            }
+        }
+    }
+
     fun connectAndSyncProfitChart(
         endpointUrl: String,
         authToken: String,

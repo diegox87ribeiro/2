@@ -25,6 +25,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.History
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -105,7 +107,8 @@ fun PortfolioScreen(
         Int?,
         String
     ) -> Unit = { _, _, _, _, _, _, _, _, _, _ -> },
-    onOpenProfitChart: () -> Unit = {}
+    onOpenProfitChart: () -> Unit = {},
+    onRefreshPortfolioLive: (PortfolioType) -> Unit = {}
 ) {
     val context = LocalContext.current
     var showAddPositionDialog by remember { mutableStateOf(false) }
@@ -306,6 +309,29 @@ fun PortfolioScreen(
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Text("Demo Fictícia")
+                            }
+                        }
+                    }
+
+                    if (activePositions.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = { onRefreshPortfolioLive(selectedType) },
+                            enabled = !state.isLiveBatchRefreshing,
+                            colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = EmeraldOnPrimary),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("portfolio_refresh_live_button")
+                        ) {
+                            if (state.isLiveBatchRefreshing) {
+                                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = EmeraldOnPrimary)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Atualizando cotações da carteira...")
+                            } else {
+                                Icon(Icons.Default.CloudSync, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Atualizar Cotações da Carteira (Tempo Real)")
                             }
                         }
                     }
