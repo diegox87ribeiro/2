@@ -25,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -104,53 +105,78 @@ fun KpiMetricCard(
     subtitle: String,
     icon: ImageVector,
     accentColor: Color = EmeraldPrimary,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null
 ) {
-    FintechCard(modifier = modifier, borderColor = accentColor.copy(alpha = 0.28f)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.labelLarge,
-                color = TextSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-            Box(
-                modifier = Modifier
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .background(accentColor.copy(alpha = 0.14f)),
-                contentAlignment = Alignment.Center
+    val cardModifier = if (onClick != null) {
+        modifier.clip(RoundedCornerShape(16.dp))
+    } else {
+        modifier
+    }
+    Card(
+        modifier = cardModifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = CardElevated),
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.28f)),
+        onClick = onClick ?: {},
+        enabled = onClick != null
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = title,
-                    tint = accentColor,
-                    modifier = Modifier.size(18.dp)
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = TextSecondary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
+                Spacer(Modifier.width(6.dp))
+                Box(
+                    modifier = Modifier
+                        .size(30.dp)
+                        .clip(CircleShape)
+                        .background(accentColor.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = title,
+                        tint = accentColor,
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
             }
+            Spacer(Modifier.height(8.dp))
+            val dynamicFontSize = when {
+                value.length >= 14 -> MaterialTheme.typography.titleMedium.fontSize
+                value.length >= 11 -> MaterialTheme.typography.titleLarge.fontSize
+                else -> MaterialTheme.typography.headlineSmall.fontSize
+            }
+            Text(
+                text = value,
+                style = MonoValueStyle.copy(
+                    fontSize = dynamicFontSize,
+                    fontWeight = FontWeight.Bold
+                ),
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Clip
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = accentColor,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
         }
-        Spacer(Modifier.height(10.dp))
-        Text(
-            text = value,
-            style = MonoValueStyle.copy(fontSize = MaterialTheme.typography.headlineSmall.fontSize),
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = subtitle,
-            style = MaterialTheme.typography.bodySmall,
-            color = accentColor,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
-        )
     }
 }
 
@@ -158,7 +184,9 @@ fun KpiMetricCard(
 fun DataDisclaimerBanner(
     text: String,
     isWarning: Boolean = false,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onHide: (() -> Unit)? = null,
+    hideButtonTag: String? = null
 ) {
     val bg = if (isWarning) AmberContainer.copy(alpha = 0.7f) else CyanContainer.copy(alpha = 0.65f)
     val fg = if (isWarning) AmberGold else ElectricCyan
@@ -182,14 +210,34 @@ fun DataDisclaimerBanner(
             Text(
                 text = text,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
             )
+            if (onHide != null) {
+                androidx.compose.material3.IconButton(
+                    onClick = onHide,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .let { if (hideButtonTag != null) it.testTag(hideButtonTag) else it }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.VisibilityOff,
+                        contentDescription = "Ocultar mensagem",
+                        tint = fg,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
         }
     }
 }
 
 @Composable
-fun SecurityGuardBanner(modifier: Modifier = Modifier) {
+fun SecurityGuardBanner(
+    modifier: Modifier = Modifier,
+    onHide: (() -> Unit)? = null,
+    hideButtonTag: String? = null
+) {
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
@@ -210,8 +258,24 @@ fun SecurityGuardBanner(modifier: Modifier = Modifier) {
             Text(
                 text = "Modo Somente Análise: sem execução de ordens financeiras, sem senhas bancárias e sem chaves no navegador.",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
             )
+            if (onHide != null) {
+                androidx.compose.material3.IconButton(
+                    onClick = onHide,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .let { if (hideButtonTag != null) it.testTag(hideButtonTag) else it }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.VisibilityOff,
+                        contentDescription = "Ocultar avisos",
+                        tint = EmeraldPrimary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
         }
     }
 }

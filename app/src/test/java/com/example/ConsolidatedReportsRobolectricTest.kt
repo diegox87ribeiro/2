@@ -208,12 +208,86 @@ class ConsolidatedReportsRobolectricTest {
 
         composeRule.onNodeWithTag("profitchart_lazy_column")
             .performScrollToNode(hasTestTag("profitchart_endpoint_input"))
-        composeRule.onNodeWithTag("profitchart_endpoint_input").assertExists()
+        composeRule.onNodeWithTag("profitchart_endpoint_input").assertIsDisplayed()
         composeRule.onNodeWithTag("profitchart_lazy_column")
             .performScrollToNode(hasTestTag("profitchart_connect_sync_button"))
-        composeRule.onNodeWithTag("profitchart_connect_sync_button").assertExists()
+        composeRule.onNodeWithTag("profitchart_connect_sync_button").assertIsDisplayed()
         composeRule.onNodeWithTag("profitchart_lazy_column")
             .performScrollToNode(hasTestTag("profitchart_import_file_button"))
-        composeRule.onNodeWithTag("profitchart_import_file_button").assertExists()
+        composeRule.onNodeWithTag("profitchart_import_file_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun `dashboard hides banners, displays dividend monitor, and opens class asset screen on chart click`() {
+        val samplePositions = listOf(
+            com.example.domain.model.PortfolioItemView(
+                id = 1L,
+                portfolioType = com.example.domain.model.PortfolioType.REAL,
+                ticker = "VALE3",
+                name = "Vale S.A.",
+                assetClass = com.example.domain.model.AssetClass.ACOES_BR,
+                quantity = 20.0,
+                averagePrice = 66.82,
+                currentPrice = 64.96,
+                sector = "Mineração",
+                dataComDay = 11,
+                dataSourceLabel = "Importação XLSX",
+                isDemo = false,
+                hasMarketPrice = true
+            ),
+            com.example.domain.model.PortfolioItemView(
+                id = 2L,
+                portfolioType = com.example.domain.model.PortfolioType.REAL,
+                ticker = "HGLG11",
+                name = "Pátria Logística",
+                assetClass = com.example.domain.model.AssetClass.FII,
+                quantity = 10.0,
+                averagePrice = 155.0,
+                currentPrice = 156.40,
+                sector = "Logística",
+                dataComDay = 30,
+                dataSourceLabel = "Importação XLSX",
+                isDemo = false,
+                hasMarketPrice = true
+            )
+        )
+        val state = com.example.ui.viewmodel.InvestDashboardState(
+            realPositions = samplePositions,
+            realHhi = com.example.domain.model.HhiRiskReport.calculate(samplePositions, 0.0),
+            marketAssets = com.example.data.repository.MarketCatalogRepository.catalogAssets
+        )
+
+        var openedClass: com.example.domain.model.AssetClass? = null
+        var hideToggledTo: Boolean? = null
+
+        composeRule.setContent {
+            InvestAiTheme {
+                com.example.ui.screens.DashboardScreen(
+                    state = state,
+                    onNavigate = {},
+                    onLoadDemoPortfolio = {},
+                    onOpenPortfolioClass = { openedClass = it },
+                    onToggleHideBanners = { hideToggledTo = it }
+                )
+            }
+        }
+
+        // Ocultar mensagens
+        composeRule.onNodeWithTag("dashboard_hide_banners_button").assertIsDisplayed().performClick()
+        assert(hideToggledTo == true)
+
+        // Clicar na fatia/classe do gráfico abre a classe correspondente
+        composeRule.onNodeWithTag("dashboard_lazy_column")
+            .performScrollToNode(hasTestTag("dashboard_class_slice_0"))
+        composeRule.onNodeWithTag("dashboard_class_slice_0").performClick()
+        assert(openedClass == com.example.domain.model.AssetClass.FII)
+
+        // Monitor de dividendos visível com recebido/projetado mensal e anual
+        composeRule.onNodeWithTag("dashboard_lazy_column")
+            .performScrollToNode(hasTestTag("dashboard_dividend_monitor_card"))
+        composeRule.onNodeWithTag("dashboard_dividend_monitor_card").assertIsDisplayed()
+        composeRule.onNodeWithTag("dividend_received_monthly").assertExists()
+        composeRule.onNodeWithTag("dividend_projected_annual").assertExists()
+        composeRule.onNodeWithTag("dividend_monitor_record_button").assertExists()
     }
 }

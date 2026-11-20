@@ -417,6 +417,10 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { repository.setAiConsent(granted) }
     }
 
+    fun setHideInfoBanners(hide: Boolean) {
+        viewModelScope.launch { prefsManager.setHideInfoBanners(hide) }
+    }
+
     fun setFutureIntegrations(supabaseUrl: String, githubRepo: String) {
         viewModelScope.launch {
             repository.setFutureIntegrationMeta(supabaseUrl, githubRepo)

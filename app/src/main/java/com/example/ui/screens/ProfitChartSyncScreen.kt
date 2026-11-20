@@ -268,9 +268,11 @@ fun ProfitChartSyncScreen(
                         modifier = Modifier.testTag("profitchart_apply_positions_switch")
                     )
                 }
+            }
+        }
 
-                Spacer(Modifier.height(12.dp))
-
+        item {
+            FintechCard {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)

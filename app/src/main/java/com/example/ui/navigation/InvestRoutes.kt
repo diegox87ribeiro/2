@@ -37,9 +37,13 @@ object InvestRoutes {
     const val ROUTE_RELATORIOS = "relatorios_gerenciais"
     const val ROUTE_PROFITCHART = "profitchart_sync"
     const val ROUTE_DATA_COM_GROUP = "data_com_grupo/{groupCode}"
+    const val ROUTE_PORTFOLIO_CLASS = "carteira_classe/{assetClassName}"
 
     fun dataComGroupRoute(group: com.example.domain.model.DataComGroup): String =
         "data_com_grupo/${group.code}"
+
+    fun portfolioClassRoute(assetClass: com.example.domain.model.AssetClass): String =
+        "carteira_classe/${assetClass.name}"
 }
 
 enum class ModuleSection(val label: String) {

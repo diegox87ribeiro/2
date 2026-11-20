@@ -80,6 +80,7 @@ import com.example.domain.model.AssetClass
 import com.example.domain.model.ConsolidatedExecutiveReport
 import com.example.domain.model.DataComGroup
 import com.example.domain.model.HhiRiskReport
+import com.example.domain.model.OperationType
 import com.example.domain.model.PortfolioType
 import com.example.ui.screens.AiAgentsScreen
 import com.example.ui.screens.AssetClassExplorerScreen
@@ -88,6 +89,7 @@ import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.DataComGroupDetailScreen
 import com.example.ui.screens.DividendCalendarScreen
 import com.example.ui.screens.FundamentalAnalysisScreen
+import com.example.ui.screens.PortfolioClassDetailScreen
 import com.example.ui.screens.PortfolioScreen
 import com.example.ui.screens.ProfitChartSyncScreen
 import com.example.ui.screens.ReportsAndArchitectureScreen
@@ -144,13 +146,17 @@ fun InvestAppRoot(
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: InvestRoutes.ROUTE_DASHBOARD
     val isDataComGroupRoute = currentRoute == InvestRoutes.ROUTE_DATA_COM_GROUP || currentRoute.startsWith("data_com_grupo/")
+    val isPortfolioClassRoute = currentRoute == InvestRoutes.ROUTE_PORTFOLIO_CLASS || currentRoute.startsWith("carteira_classe/")
     val activeDataComGroup = DataComGroup.entries.firstOrNull {
         it.code == navBackStackEntry?.arguments?.getString("groupCode")
     } ?: DataComGroup.G1
-    val currentModule = if (isDataComGroupRoute) {
-        ALL_INVEST_MODULES.first { it.route == InvestRoutes.ROUTE_CALENDARIO }
-    } else {
-        ALL_INVEST_MODULES.firstOrNull { it.route == currentRoute } ?: ALL_INVEST_MODULES.first()
+    val activePortfolioClass = AssetClass.entries.firstOrNull {
+        it.name == navBackStackEntry?.arguments?.getString("assetClassName")
+    } ?: AssetClass.ACOES_BR
+    val currentModule = when {
+        isDataComGroupRoute -> ALL_INVEST_MODULES.first { it.route == InvestRoutes.ROUTE_CALENDARIO }
+        isPortfolioClassRoute -> ALL_INVEST_MODULES.first { it.route == InvestRoutes.ROUTE_CARTEIRA }
+        else -> ALL_INVEST_MODULES.firstOrNull { it.route == currentRoute } ?: ALL_INVEST_MODULES.first()
     }
 
     val navigateTo: (String) -> Unit = { route ->
@@ -185,6 +191,8 @@ fun InvestAppRoot(
                     currentRoute = currentRoute,
                     isDataComGroupRoute = isDataComGroupRoute,
                     activeDataComGroup = activeDataComGroup,
+                    isPortfolioClassRoute = isPortfolioClassRoute,
+                    activePortfolioClass = activePortfolioClass,
                     showMenuButton = false,
                     showBottomBar = false,
                     showRail = false,
@@ -230,6 +238,8 @@ fun InvestAppRoot(
                     currentRoute = currentRoute,
                     isDataComGroupRoute = isDataComGroupRoute,
                     activeDataComGroup = activeDataComGroup,
+                    isPortfolioClassRoute = isPortfolioClassRoute,
+                    activePortfolioClass = activePortfolioClass,
                     showMenuButton = true,
                     showBottomBar = !isMedium,
                     showRail = isMedium,
@@ -329,6 +339,8 @@ private fun MainScaffoldBody(
     currentRoute: String,
     isDataComGroupRoute: Boolean,
     activeDataComGroup: DataComGroup,
+    isPortfolioClassRoute: Boolean,
+    activePortfolioClass: AssetClass,
     showMenuButton: Boolean,
     showBottomBar: Boolean,
     showRail: Boolean,
@@ -346,6 +358,7 @@ private fun MainScaffoldBody(
     isCloudSyncing: Boolean,
     onSyncConsolidatedReport: (ConsolidatedExecutiveReport, HhiRiskReport, ImportHistoryEntity?, Int) -> Unit
 ) {
+    val isNestedDetailRoute = isDataComGroupRoute || isPortfolioClassRoute
     Scaffold(
         containerColor = ObsidianBg,
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -353,7 +366,7 @@ private fun MainScaffoldBody(
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = DeepNavySurface),
                 navigationIcon = {
-                    if (isDataComGroupRoute) {
+                    if (isNestedDetailRoute) {
                         IconButton(
                             onClick = { navController.popBackStack() },
                             modifier = Modifier.testTag("topbar_back_button")
@@ -368,12 +381,19 @@ private fun MainScaffoldBody(
                 },
                 title = {
                     Column {
-                        if (isDataComGroupRoute) {
-                            Text("Grupo ${activeDataComGroup.code} • Datas-Com", style = MaterialTheme.typography.titleMedium)
-                            Text("${activeDataComGroup.label} • Lista de Ativos", style = MaterialTheme.typography.labelSmall, color = EmeraldPrimary)
-                        } else {
-                            Text(currentModule.title, style = MaterialTheme.typography.titleMedium)
-                            Text("INVEST AI • Módulo ${currentModule.number}/${ALL_INVEST_MODULES.size}", style = MaterialTheme.typography.labelSmall, color = EmeraldPrimary)
+                        when {
+                            isDataComGroupRoute -> {
+                                Text("Grupo ${activeDataComGroup.code} • Datas-Com", style = MaterialTheme.typography.titleMedium)
+                                Text("${activeDataComGroup.label} • Lista de Ativos", style = MaterialTheme.typography.labelSmall, color = EmeraldPrimary)
+                            }
+                            isPortfolioClassRoute -> {
+                                Text(activePortfolioClass.label, style = MaterialTheme.typography.titleMedium)
+                                Text("Carteira Real • Ativos da Classe", style = MaterialTheme.typography.labelSmall, color = EmeraldPrimary)
+                            }
+                            else -> {
+                                Text(currentModule.title, style = MaterialTheme.typography.titleMedium)
+                                Text("INVEST AI • Módulo ${currentModule.number}/${ALL_INVEST_MODULES.size}", style = MaterialTheme.typography.labelSmall, color = EmeraldPrimary)
+                            }
                         }
                     }
                 },
@@ -457,6 +477,22 @@ private fun MainScaffoldBody(
                                 navController.navigate(InvestRoutes.dataComGroupRoute(grp)) {
                                     launchSingleTop = true
                                 }
+                            },
+                            onOpenPortfolioClass = { assetClass ->
+                                navController.navigate(InvestRoutes.portfolioClassRoute(assetClass)) {
+                                    launchSingleTop = true
+                                }
+                            },
+                            onToggleHideBanners = viewModel::setHideInfoBanners,
+                            onRecordDividend = { ticker, totalBrl, notes ->
+                                viewModel.recordOperation(
+                                    portfolioType = PortfolioType.REAL,
+                                    ticker = ticker,
+                                    operationType = OperationType.PROVENTO,
+                                    quantity = 1.0,
+                                    unitPrice = totalBrl,
+                                    notes = notes.ifBlank { "Provento recebido" }
+                                )
                             }
                         )
                     }
@@ -543,6 +579,27 @@ private fun MainScaffoldBody(
                             },
                             onBack = { navController.popBackStack() },
                             onOpenCarteira = { onNavigate(InvestRoutes.ROUTE_CARTEIRA) }
+                        )
+                    }
+                    composable(
+                        route = InvestRoutes.ROUTE_PORTFOLIO_CLASS,
+                        arguments = listOf(navArgument("assetClassName") { type = NavType.StringType })
+                    ) { backStackEntry ->
+                        val clsName = backStackEntry.arguments?.getString("assetClassName")
+                        val cls = AssetClass.entries.firstOrNull { it.name == clsName } ?: AssetClass.ACOES_BR
+                        PortfolioClassDetailScreen(
+                            assetClass = cls,
+                            state = state,
+                            onSelectClass = { nextClass ->
+                                navController.navigate(InvestRoutes.portfolioClassRoute(nextClass)) {
+                                    popUpTo(InvestRoutes.ROUTE_PORTFOLIO_CLASS) { inclusive = true }
+                                    launchSingleTop = true
+                                }
+                            },
+                            onUpdatePosition = viewModel::updatePosition,
+                            onDeletePosition = viewModel::deletePosition,
+                            onOpenCarteira = { onNavigate(InvestRoutes.ROUTE_CARTEIRA) },
+                            onBack = { navController.popBackStack() }
                         )
                     }
                     composable(InvestRoutes.ROUTE_FUNDAMENTALISTA) {

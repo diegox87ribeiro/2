@@ -62,7 +62,9 @@ fun InteractiveDonutChart(
     slices: List<AllocationSlice>,
     centerLabel: String,
     centerValue: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onSliceOpen: ((AllocationSlice) -> Unit)? = null,
+    sliceTestTagPrefix: String? = null
 ) {
     var selectedIdx by remember(slices) { mutableIntStateOf(0) }
 
@@ -88,16 +90,26 @@ fun InteractiveDonutChart(
     Row(
         modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Box(
-            modifier = Modifier.size(164.dp),
+            modifier = Modifier
+                .size(156.dp)
+                .let { base ->
+                    if (onSliceOpen != null && selected != null) {
+                        base
+                            .clip(CircleShape)
+                            .clickable { onSliceOpen(selected) }
+                    } else {
+                        base
+                    }
+                },
             contentAlignment = Alignment.Center
         ) {
             Canvas(
                 modifier = Modifier
-                    .size(160.dp)
-                    .pointerInput(slices) {
+                    .size(152.dp)
+                    .pointerInput(slices, onSliceOpen) {
                         detectTapGestures { offset ->
                             val cx = size.width / 2f
                             val cy = size.height / 2f
@@ -108,6 +120,7 @@ fun InteractiveDonutChart(
                                 val sweep = (slice.valueBrl / total) * 360.0
                                 if (angle >= acc && angle <= acc + sweep) {
                                     selectedIdx = idx
+                                    onSliceOpen?.invoke(slice)
                                     return@detectTapGestures
                                 }
                                 acc += sweep
@@ -150,7 +163,7 @@ fun InteractiveDonutChart(
 
         Column(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             slices.take(6).forEachIndexed { idx, slice ->
                 val color = ChartColors[idx % ChartColors.size]
@@ -158,10 +171,17 @@ fun InteractiveDonutChart(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(min = 48.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(if (isSel) color.copy(alpha = 0.14f) else Color.Transparent)
-                        .clickable { selectedIdx = idx }
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                        .let { base ->
+                            if (sliceTestTagPrefix != null) base.testTag("${sliceTestTagPrefix}_$idx") else base
+                        }
+                        .clickable {
+                            selectedIdx = idx
+                            onSliceOpen?.invoke(slice)
+                        }
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
@@ -175,11 +195,22 @@ fun InteractiveDonutChart(
                         Spacer(Modifier.width(8.dp))
                         Text(slice.label, style = MaterialTheme.typography.bodySmall)
                     }
-                    Text(
-                        "${"%.1f".format(slice.weightPercent)}%",
-                        style = MonoValueStyle.copy(fontSize = MaterialTheme.typography.bodySmall.fontSize),
-                        color = if (isSel) color else TextSecondary
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "${"%.1f".format(slice.weightPercent)}%",
+                            style = MonoValueStyle.copy(fontSize = MaterialTheme.typography.bodySmall.fontSize),
+                            color = if (isSel) color else TextSecondary
+                        )
+                        if (onSliceOpen != null) {
+                            Spacer(Modifier.width(2.dp))
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = "Abrir ativos de ${slice.label}",
+                                tint = if (isSel) color else TextSecondary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -192,35 +223,48 @@ fun InteractiveMultiLineChart(
     seriesList: List<BenchmarkSeries>,
     modifier: Modifier = Modifier
 ) {
-    var selectedSeriesIdx by remember { mutableIntStateOf(0) }
+    var selectedSeriesIdx by remember(seriesList) { mutableIntStateOf(0) }
     var inspectedMonthIdx by remember { mutableIntStateOf(11) }
 
     if (seriesList.isEmpty()) return
 
+    val safeSeriesIdx = selectedSeriesIdx.coerceIn(0, seriesList.lastIndex)
     val allValues = seriesList.flatMap { it.normalizedPoints12m }
     val minVal = (allValues.minOrNull() ?: 95.0) - 2.0
     val maxVal = (allValues.maxOrNull() ?: 135.0) + 2.0
     val range = (maxVal - minVal).coerceAtLeast(1.0)
 
     Column(modifier = modifier.fillMaxWidth()) {
-        val activeSeries = seriesList.getOrNull(selectedSeriesIdx)
-        val monthPoint = activeSeries?.normalizedPoints12m?.getOrNull(inspectedMonthIdx) ?: 100.0
+        val activeSeries = seriesList.getOrNull(safeSeriesIdx)
+        val ptsSize = activeSeries?.normalizedPoints12m?.size?.coerceAtLeast(1) ?: 12
+        val safeMonthIdx = inspectedMonthIdx.coerceIn(0, ptsSize - 1)
+        val monthPoint = activeSeries?.normalizedPoints12m?.getOrNull(safeMonthIdx) ?: 100.0
+        val activeColor = ChartColors[safeSeriesIdx % ChartColors.size]
+        val deltaColor = if (monthPoint >= 100.0) EmeraldPrimary else CoralRed
 
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Text(
-                text = "${activeSeries?.name ?: ""} • Mês ${inspectedMonthIdx + 1}/12",
+                text = "${activeSeries?.name ?: ""} • Mês ${safeMonthIdx + 1}/$ptsSize",
                 style = MaterialTheme.typography.labelLarge,
-                color = ChartColors[selectedSeriesIdx % ChartColors.size]
+                color = activeColor,
+                maxLines = 1
             )
-            Text(
-                text = "Base 100 -> ${"%.1f".format(monthPoint)} (${formatPct(monthPoint - 100.0)})",
-                style = MonoValueStyle,
-                color = if (monthPoint >= 100.0) EmeraldPrimary else CoralRed
-            )
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = deltaColor.copy(alpha = 0.14f)
+            ) {
+                Text(
+                    text = "Base 100 → ${"%.1f".format(monthPoint)} (${formatPct(monthPoint - 100.0)})",
+                    style = MonoValueStyle.copy(fontSize = MaterialTheme.typography.labelLarge.fontSize),
+                    color = deltaColor,
+                    softWrap = false,
+                    maxLines = 1,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
         }
 
         Spacer(Modifier.height(8.dp))
@@ -256,7 +300,7 @@ fun InteractiveMultiLineChart(
 
             // Linha vertical do mês selecionado
             val count = seriesList.first().normalizedPoints12m.size.coerceAtLeast(2)
-            val selX = (inspectedMonthIdx.toFloat() / (count - 1)) * w
+            val selX = (safeMonthIdx.toFloat() / (count - 1)) * w
             drawLine(
                 color = Color.White.copy(alpha = 0.28f),
                 start = Offset(selX, 0f),
@@ -276,14 +320,14 @@ fun InteractiveMultiLineChart(
                 }
                 drawPath(
                     path = path,
-                    color = if (idx == selectedSeriesIdx) color else color.copy(alpha = 0.45f),
-                    style = Stroke(width = if (idx == selectedSeriesIdx) 5f else 2.5f, cap = StrokeCap.Round)
+                    color = if (idx == safeSeriesIdx) color else color.copy(alpha = 0.45f),
+                    style = Stroke(width = if (idx == safeSeriesIdx) 5f else 2.5f, cap = StrokeCap.Round)
                 )
-                val dotVal = pts.getOrNull(inspectedMonthIdx) ?: pts.last()
+                val dotVal = pts.getOrNull(safeMonthIdx) ?: pts.last()
                 val dotY = padV + usableH * (1f - ((dotVal - minVal) / range).toFloat())
                 drawCircle(
                     color = color,
-                    radius = if (idx == selectedSeriesIdx) 8f else 4f,
+                    radius = if (idx == safeSeriesIdx) 8f else 4f,
                     center = Offset(selX, dotY)
                 )
             }
@@ -297,7 +341,7 @@ fun InteractiveMultiLineChart(
         ) {
             seriesList.forEachIndexed { idx, s ->
                 val color = ChartColors[idx % ChartColors.size]
-                val isSelected = idx == selectedSeriesIdx
+                val isSelected = idx == safeSeriesIdx
                 Surface(
                     shape = RoundedCornerShape(8.dp),
                     color = if (isSelected) color.copy(alpha = 0.18f) else Color.Transparent,

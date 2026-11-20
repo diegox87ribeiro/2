@@ -1,0 +1,130 @@
+package com.example
+
+import com.example.data.repository.LiveQuoteParsers
+import com.example.data.repository.ProfitChartParsers
+import com.example.domain.model.OperationType
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
+class MarketAndProfitParsersRobolectricTest {
+
+    @Test
+    fun `live quote parsers decode B3, Yahoo SA, Brapi, ADVFN payloads and calculate RSI14`() {
+        val b3Json = """
+            {
+              "Msg": { "dtTm": "2026-11-19 16:40:00" },
+              "TradgFlr": {
+                "date": "2026-11-19",
+                "scty": {
+                  "symb": "VALE3",
+                  "desc": "VALE        ON      NM",
+                  "SctyQtn": {
+                    "curPrc": 65.42,
+                    "prcFlcn": 1.35,
+                    "opngPric": 64.50,
+                    "minPric": 64.10,
+                    "maxPric": 65.80
+                  },
+                  "lstQtn": [
+                    { "closPric": 64.80 },
+                    { "closPric": 65.42 }
+                  ]
+                }
+              }
+            }
+        """.trimIndent()
+        val b3 = LiveQuoteParsers.parseB3FluctuationJson("VALE3", b3Json)!!
+        assertEquals(65.42, b3.price!!, 0.001)
+        assertEquals(1.35, b3.changePercent1d!!, 0.001)
+        assertEquals("VALE ON NM", b3.companyName)
+
+        val yahooJson = """
+            {
+              "chart": {
+                "result": [{
+                  "meta": {
+                    "longName": "Vulcabras S.A.",
+                    "regularMarketPrice": 12.40,
+                    "regularMarketPreviousClose": 12.00,
+                    "regularMarketDayHigh": 12.55,
+                    "regularMarketDayLow": 11.95,
+                    "regularMarketVolume": 500000
+                  },
+                  "indicators": {
+                    "quote": [{
+                      "close": [10.0,10.2,10.4,10.3,10.5,10.8,11.0,11.1,11.2,11.4,11.5,11.7,11.9,12.0,12.1,12.4],
+                      "low": [9.9,10.1,10.3,10.2,10.4,10.7,10.9,11.0,11.1,11.3,11.4,11.6,11.8,11.9,12.0,12.1],
+                      "high": [10.1,10.3,10.5,10.4,10.6,10.9,11.1,11.2,11.3,11.5,11.6,11.8,12.0,12.1,12.2,12.55]
+                    }]
+                  }
+                }]
+              }
+            }
+        """.trimIndent()
+        val yahoo = LiveQuoteParsers.parseYahooChartJson("VULC3", yahooJson)!!
+        assertEquals(12.40, yahoo.price!!, 0.001)
+        assertEquals(3.333, yahoo.changePercent1d!!, 0.01)
+        assertEquals(6.2, yahoo.dailyVolumeBrlMillions!!, 0.01)
+        val rsi = LiveQuoteParsers.calculateRsi14(yahoo.closesHistory)
+        assertTrue(rsi != null && rsi in 70.0..100.0)
+
+        val advfnHtml = """<span id="quoteElementPiece1">6,75</span><span id="quoteElementPiece2">(+2,15%)</span>"""
+        val advfn = LiveQuoteParsers.parseAdvfnQuoteHtml("WIZC3", advfnHtml)!!
+        assertEquals(6.75, advfn.price!!, 0.001)
+        assertEquals(2.15, advfn.changePercent1d!!, 0.001)
+
+        assertEquals("VULC3", LiveQuoteParsers.normalizeTicker(" vulc3.sa "))
+        assertEquals("WIZC3", LiveQuoteParsers.normalizeTicker("BOV:WIZC3"))
+    }
+
+    @Test
+    fun `profitChart parsers decode JSON and CSV executed operations and skip canceled orders`() {
+        val json = """
+            {
+              "executions": [
+                {
+                  "orderId": "ORD-1001",
+                  "ticker": "VALE3",
+                  "side": "COMPRA",
+                  "status": "EXECUTADA",
+                  "executedQty": 100,
+                  "avgPrice": 65.40,
+                  "executedAt": "19/11/2026 14:10",
+                  "broker": "XP"
+                },
+                {
+                  "orderId": "ORD-1002",
+                  "ticker": "PETR4",
+                  "side": "VENDA",
+                  "status": "CANCELADA",
+                  "executedQty": 50,
+                  "avgPrice": 38.00
+                }
+              ]
+            }
+        """.trimIndent()
+        val jsonOutcome = ProfitChartParsers.parsePayload(json, "ProfitChart API")
+        assertEquals(1, jsonOutcome.executions.size)
+        assertEquals(1, jsonOutcome.skippedNonExecutedCount)
+        assertEquals("VALE3", jsonOutcome.executions.first().ticker)
+        assertEquals(OperationType.COMPRA, jsonOutcome.executions.first().operationType)
+        assertEquals(6540.0, jsonOutcome.executions.first().totalValue, 0.01)
+
+        val csv = """
+            Ordem;Ativo;Lado;Status;Qtd Executada;Preço Médio;Atualização;Corretora
+            7781;WIZC3;C;Executada;50;6,45;19/11/2026 14:15;Clear
+            7782;ITUB4;V;Rejeitada;20;35,00;19/11/2026 14:16;Clear
+        """.trimIndent()
+        val csvOutcome = ProfitChartParsers.parsePayload(csv, "ProfitChart CSV")
+        assertEquals(1, csvOutcome.executions.size)
+        assertEquals(1, csvOutcome.skippedNonExecutedCount)
+        assertEquals("WIZC3", csvOutcome.executions.first().ticker)
+        assertEquals(6.45, csvOutcome.executions.first().unitPrice, 0.001)
+    }
+}

@@ -23,7 +23,8 @@ data class AppPreferencesState(
     val profitAutoSyncEnabled: Boolean = false,
     val profitApplyToPositions: Boolean = true,
     val profitLastSyncEpochMs: Long = 0L,
-    val profitLastStatusMessage: String = ""
+    val profitLastStatusMessage: String = "",
+    val hideInfoBanners: Boolean = false
 )
 
 class PreferencesManager(private val context: Context) {
@@ -39,6 +40,7 @@ class PreferencesManager(private val context: Context) {
         val PROFIT_APPLY_POSITIONS = booleanPreferencesKey("profit_apply_positions")
         val PROFIT_LAST_SYNC_MS = longPreferencesKey("profit_last_sync_ms")
         val PROFIT_LAST_STATUS = stringPreferencesKey("profit_last_status")
+        val HIDE_INFO_BANNERS = booleanPreferencesKey("hide_info_banners")
     }
 
     val preferencesFlow: Flow<AppPreferencesState> = context.investPrefsDataStore.data.map { prefs ->
@@ -53,7 +55,8 @@ class PreferencesManager(private val context: Context) {
             profitAutoSyncEnabled = prefs[Keys.PROFIT_AUTO_SYNC] ?: false,
             profitApplyToPositions = prefs[Keys.PROFIT_APPLY_POSITIONS] ?: true,
             profitLastSyncEpochMs = prefs[Keys.PROFIT_LAST_SYNC_MS] ?: 0L,
-            profitLastStatusMessage = prefs[Keys.PROFIT_LAST_STATUS] ?: ""
+            profitLastStatusMessage = prefs[Keys.PROFIT_LAST_STATUS] ?: "",
+            hideInfoBanners = prefs[Keys.HIDE_INFO_BANNERS] ?: false
         )
     }
 
@@ -67,6 +70,10 @@ class PreferencesManager(private val context: Context) {
 
     suspend fun setAiPortfolioConsent(granted: Boolean) {
         context.investPrefsDataStore.edit { it[Keys.AI_CONSENT] = granted }
+    }
+
+    suspend fun setHideInfoBanners(hide: Boolean) {
+        context.investPrefsDataStore.edit { it[Keys.HIDE_INFO_BANNERS] = hide }
     }
 
     suspend fun setFutureIntegrationMeta(supabaseUrl: String, githubRepo: String) {
