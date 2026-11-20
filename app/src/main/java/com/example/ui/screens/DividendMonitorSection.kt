@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import com.example.domain.model.AssetDividendRow
 import com.example.domain.model.DividendMonitorSummary
 import com.example.ui.components.FintechCard
+import com.example.ui.components.MonthlyDividendBarChart
 import com.example.ui.components.formatBrl
 import com.example.ui.components.formatPct
 import com.example.ui.theme.AmberGold
@@ -57,7 +58,8 @@ import com.example.ui.theme.TextSecondary
 private enum class DividendMonitorViewTab(val label: String) {
     MENSAL("Mensal"),
     ANUAL("Anual"),
-    POR_ATIVO("Por Ativo")
+    POR_ATIVO("Por Ativo"),
+    JAN_DEZ("Jan–Dez")
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -186,7 +188,20 @@ fun DividendMonitorDashboardCard(
 
         Spacer(Modifier.height(8.dp))
 
-        if (summary.perAssetRows.isEmpty()) {
+        if (activeTab == DividendMonitorViewTab.JAN_DEZ) {
+            if (summary.monthlyJanToDec.isEmpty() || summary.perAssetRows.isEmpty()) {
+                Text(
+                    "Importe ativos ou registre proventos para visualizar a curva Jan–Dez.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+            } else {
+                MonthlyDividendBarChart(
+                    points = summary.monthlyJanToDec,
+                    modifier = Modifier.testTag("dividend_jan_dec_chart")
+                )
+            }
+        } else if (summary.perAssetRows.isEmpty()) {
             Text(
                 "Importe ativos ou registre proventos na Carteira Real para acompanhar o recebido e o projetado mensal e anual por ativo.",
                 style = MaterialTheme.typography.bodySmall,
@@ -329,7 +344,7 @@ private fun AssetDividendItemRow(
                         Text("Rec: ${formatBrl(row.receivedMonthBrl)}", style = MaterialTheme.typography.labelSmall, color = EmeraldPrimary)
                         Text("Proj: ${formatBrl(row.projectedMonthBrl)}/mês", style = MonoValueStyle.copy(fontSize = MaterialTheme.typography.bodySmall.fontSize), color = ElectricCyan)
                     }
-                    DividendMonitorViewTab.ANUAL -> {
+                    DividendMonitorViewTab.ANUAL, DividendMonitorViewTab.JAN_DEZ -> {
                         Text("Rec 12m: ${formatBrl(row.receivedAnnualBrl)}", style = MaterialTheme.typography.labelSmall, color = EmeraldPrimary)
                         Text("Proj: ${formatBrl(row.projectedAnnualBrl)}/ano", style = MonoValueStyle.copy(fontSize = MaterialTheme.typography.bodySmall.fontSize), color = AmberGold)
                     }

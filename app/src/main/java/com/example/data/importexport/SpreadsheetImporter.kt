@@ -3,15 +3,21 @@ package com.example.data.importexport
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import com.example.data.local.PortfolioOperationEntity
 import com.example.data.local.PortfolioPositionEntity
 import com.example.domain.model.AssetClass
+import com.example.domain.model.OperationType
 import com.example.domain.model.PortfolioItemView
+import com.example.domain.model.PortfolioType
 import org.w3c.dom.Element
 import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.charset.Charset
 import java.nio.charset.CodingErrorAction
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
 import java.util.Locale
 import java.util.zip.ZipInputStream
 import javax.xml.parsers.DocumentBuilderFactory
@@ -22,7 +28,8 @@ data class ImportParseResult(
     val positions: List<PortfolioPositionEntity>,
     val cashBalanceBrl: Double?,
     val warnings: List<String>,
-    val detectedColumns: List<String>
+    val detectedColumns: List<String>,
+    val dividends: List<PortfolioOperationEntity> = emptyList()
 )
 
 data class SpreadsheetColumnSpec(
@@ -38,11 +45,14 @@ object SpreadsheetImporter {
         SpreadsheetColumnSpec("Ticker", true, "Ticker, Ativo, Código, Papel", "ITUB4 / HGLG11 / CAIXA"),
         SpreadsheetColumnSpec("Nome", false, "Nome, Descrição, Empresa, Fundo", "Itaú Unibanco PN"),
         SpreadsheetColumnSpec("Classe", false, "Classe, Tipo, Categoria", "Ações BR, FII, FIAGRO, ETF, Renda Fixa, Cripto"),
-        SpreadsheetColumnSpec("Quantidade", true, "Quantidade, Qtd, Qtde, Cotas", "100 / 12,5"),
-        SpreadsheetColumnSpec("Preço Médio", true, "Preço Médio, PM, Custo Médio", "31,50"),
+        SpreadsheetColumnSpec("Quantidade", true, "Quantidade, Qtd, Qtde, Cotas (vazio se linha só de dividendo)", "100 / 12,5"),
+        SpreadsheetColumnSpec("Preço Médio", true, "Preço Médio, PM, Custo Médio (vazio se linha só de dividendo)", "31,50"),
         SpreadsheetColumnSpec("Preço Atual", false, "Preço Atual, Cotação, Valor Atual", "35,80 (vazio se não houver)"),
         SpreadsheetColumnSpec("Setor", false, "Setor, Segmento", "Bancos / Logística"),
-        SpreadsheetColumnSpec("Data-Com", false, "Data-Com, Dia Com", "3 / 30 (dia de 1 a 31)")
+        SpreadsheetColumnSpec("Data-Com", false, "Data-Com, Dia Com", "3 / 30 (dia de 1 a 31)"),
+        SpreadsheetColumnSpec("Dividendo Valor", false, "Dividendo Valor, Provento Valor, Valor Provento, Dividendo, Provento, Rendimento, JCP, Dividendo Por Cota", "27,50 (total) ou por cota"),
+        SpreadsheetColumnSpec("Data Provento", false, "Data Provento, Data Pagamento, Data Dividendo, Pgto Data", "15/11/2026"),
+        SpreadsheetColumnSpec("Tipo Provento", false, "Tipo Provento, Evento Provento, Evento", "Dividendo / JCP / Rendimento")
     )
 
     fun importFromUri(context: Context, uri: Uri): ImportParseResult {
@@ -78,22 +88,30 @@ object SpreadsheetImporter {
 
     fun generateStandardCsvTemplate(): String {
         val lines = listOf(
-            "Ticker;Nome;Classe;Quantidade;Preço Médio;Preço Atual;Setor;Data-Com",
-            "ITUB4;Itaú Unibanco PN;Ações BR;100;31,50;35,80;Bancos;3",
-            "HGLG11;Pátria Logística FII;FII;25;158,00;156,40;Logística;30",
-            "KNCA11;Kinea Crédito Agro FIAGRO;FIAGRO;40;96,20;98,50;Agro / CRAs;30",
-            "IVVB11;iShares S&P 500 ETF;ETF;10;340,00;382,50;EUA / S&P 500;",
-            "SELIC29;Tesouro Selic 2029;Renda Fixa;0,50;14900,00;15842,30;Título Público;",
-            "CAIXA;Saldo Disponível em Corretora;Renda Fixa;1;2500,00;;Reserva;"
+            "Ticker;Nome;Classe;Quantidade;Preço Médio;Preço Atual;Setor;Data-Com;Dividendo Valor;Data Provento;Tipo Provento",
+            "ITUB4;Itaú Unibanco PN;Ações BR;100;31,50;35,80;Bancos;3;28,40;01/11/2026;JCP",
+            "HGLG11;Pátria Logística FII;FII;25;158,00;156,40;Logística;30;27,50;14/11/2026;Rendimento",
+            "KNCA11;Kinea Crédito Agro FIAGRO;FIAGRO;40;96,20;98,50;Agro / CRAs;30;43,20;13/11/2026;Rendimento",
+            "IVVB11;iShares S&P 500 ETF;ETF;10;340,00;382,50;EUA / S&P 500;;;;",
+            "SELIC29;Tesouro Selic 2029;Renda Fixa;0,50;14900,00;15842,30;Título Público;;;;",
+            "CAIXA;Saldo Disponível em Corretora;Renda Fixa;1;2500,00;;Reserva;;;;"
         )
         return "\uFEFF" + lines.joinToString("\n")
     }
 
-    fun exportPositionsToCsv(positions: List<PortfolioItemView>, cashBalanceBrl: Double): String {
-        val header = "Ticker;Nome;Classe;Quantidade;Preço Médio;Preço Atual;Setor;Data-Com"
+    fun exportPositionsToCsv(
+        positions: List<PortfolioItemView>,
+        cashBalanceBrl: Double,
+        latestDividendsByTicker: Map<String, Triple<Double, String, String>> = emptyMap()
+    ): String {
+        val header = "Ticker;Nome;Classe;Quantidade;Preço Médio;Preço Atual;Setor;Data-Com;Dividendo Valor;Data Provento;Tipo Provento"
         val rows = positions.map { p ->
             val curStr = if (p.hasMarketPrice && p.currentPrice > 0.0) formatCsvDecimal(p.currentPrice) else ""
             val dcStr = p.dataComDay?.toString().orEmpty()
+            val divInfo = latestDividendsByTicker[p.ticker.uppercase()]
+            val divValStr = divInfo?.first?.takeIf { it > 0.0 }?.let { formatCsvDecimal(it) }.orEmpty()
+            val divDateStr = divInfo?.second.orEmpty()
+            val divTypeStr = divInfo?.third.orEmpty()
             listOf(
                 escapeCsvCell(p.ticker),
                 escapeCsvCell(p.name),
@@ -102,12 +120,15 @@ object SpreadsheetImporter {
                 formatCsvDecimal(p.averagePrice),
                 curStr,
                 escapeCsvCell(p.sector),
-                dcStr
+                dcStr,
+                divValStr,
+                escapeCsvCell(divDateStr),
+                escapeCsvCell(divTypeStr)
             ).joinToString(";")
         }
         val cashRow = if (cashBalanceBrl > 0.0) {
             listOf(
-                "CAIXA;Saldo em Caixa;Renda Fixa;1;${formatCsvDecimal(cashBalanceBrl)};;Liquidez;"
+                "CAIXA;Saldo em Caixa;Renda Fixa;1;${formatCsvDecimal(cashBalanceBrl)};;Liquidez;;;;"
             )
         } else {
             emptyList()
@@ -358,14 +379,37 @@ object SpreadsheetImporter {
         val dataComIdx = findCol(normHeaders, "data_com", "datacom", "dia_com")
         val cashIdx = findCol(normHeaders, "caixa", "saldo_caixa", "cash")
 
-        if (tickerIdx == -1 || qtyIdx == -1 || (pmIdx == -1 && totalCostIdx == -1)) {
+        // Campos opcionais de dividendos / proventos na mesma tabela de ativos
+        val divPerUnitIdx = findCol(
+            normHeaders,
+            "dividendo_por_cota", "dividendo_cota", "provento_unitario", "provento_cota", "rendimento_cota", "valor_cota"
+        )
+        val divValueIdx = findCol(
+            normHeaders,
+            "dividendo_valor", "valor_dividendo", "provento_valor", "valor_provento",
+            "valor_total_provento", "dividendo_total", "provento_total",
+            "dividendo", "provento", "rendimento", "jcp", "dividendos", "proventos"
+        )
+        val divDateIdx = findCol(
+            normHeaders,
+            "data_provento", "data_dividendo", "data_pagamento", "data_pgto", "pgto_data", "pagamento_provento"
+        )
+        val divTypeIdx = findCol(
+            normHeaders,
+            "tipo_provento", "tipo_dividendo", "evento_provento", "evento"
+        )
+
+        val hasPositionCols = qtyIdx != -1 && (pmIdx != -1 || totalCostIdx != -1)
+        val hasDividendCols = divValueIdx != -1 || divPerUnitIdx != -1
+
+        if (tickerIdx == -1 || (!hasPositionCols && !hasDividendCols)) {
             return ImportParseResult(
                 fileName = fileName,
                 fileType = fileType,
                 positions = emptyList(),
                 cashBalanceBrl = null,
                 warnings = listOf(
-                    "Colunas obrigatórias não encontradas. Esperado: Ticker/Ativo, Quantidade/Qtd e Preço Médio/PM. Detectadas: ${headers.joinToString(", ")}"
+                    "Colunas obrigatórias não encontradas. Esperado: Ticker/Ativo + (Quantidade/PM e/ou Dividendo Valor). Detectadas: ${headers.joinToString(", ")}"
                 ),
                 detectedColumns = headers
             )
@@ -373,7 +417,9 @@ object SpreadsheetImporter {
 
         val warnings = mutableListOf<String>()
         val aggregated = linkedMapOf<String, PortfolioPositionEntity>()
+        val importedDividends = mutableListOf<PortfolioOperationEntity>()
         var detectedCash: Double? = null
+        val todayFormatted = SimpleDateFormat("dd/MM/yyyy", Locale("pt", "BR")).format(Date())
 
         rows.drop(1).forEachIndexed { idx, row ->
             val rawTickerCell = row.getOrNull(tickerIdx)?.trim()?.uppercase().orEmpty()
@@ -381,9 +427,9 @@ object SpreadsheetImporter {
             val rawTicker = rawTickerCell.substringBefore(" - ").trim()
 
             if (rawTicker == "CAIXA" || rawTicker == "CASH" || rawTicker == "SALDO") {
-                val valCash = parseBrNumber(row.getOrNull(pmIdx))
-                    ?: parseBrNumber(row.getOrNull(totalCostIdx))
-                    ?: parseBrNumber(row.getOrNull(curIdx))
+                val valCash = (if (pmIdx != -1) parseBrNumber(row.getOrNull(pmIdx)) else null)
+                    ?: (if (totalCostIdx != -1) parseBrNumber(row.getOrNull(totalCostIdx)) else null)
+                    ?: (if (curIdx != -1) parseBrNumber(row.getOrNull(curIdx)) else null)
                 if (valCash != null && valCash >= 0.0) {
                     detectedCash = (detectedCash ?: 0.0) + valCash
                 }
@@ -396,65 +442,111 @@ object SpreadsheetImporter {
                 }
             }
 
-            val qty = parseBrNumber(row.getOrNull(qtyIdx))
+            val qty = if (qtyIdx != -1) parseBrNumber(row.getOrNull(qtyIdx)) else null
             val pm = (if (pmIdx != -1) parseBrNumber(row.getOrNull(pmIdx)) else null)
                 ?: (if (totalCostIdx != -1 && qty != null && qty > 0.0) {
                     parseBrNumber(row.getOrNull(totalCostIdx))?.div(qty)
                 } else null)
 
-            if (qty == null || qty <= 0.0 || pm == null || pm <= 0.0) {
-                warnings.add("Linha ${idx + 2} ($rawTicker) ignorada: quantidade ou preço médio inválido.")
-                return@forEachIndexed
+            val hasValidPosition = qty != null && qty > 0.0 && pm != null && pm > 0.0
+
+            if (hasValidPosition) {
+                val validQty = qty!!
+                val validPm = pm!!
+                val currentPrice = if (curIdx != -1) parseBrNumber(row.getOrNull(curIdx)) else null
+                val hasMarketPrice = currentPrice != null && currentPrice > 0.0
+
+                val assetClass = inferAssetClass(
+                    rawClass = row.getOrNull(classIdx).orEmpty(),
+                    ticker = rawTicker
+                )
+                val dataComDay = if (dataComIdx != -1) {
+                    row.getOrNull(dataComIdx)?.filter { it.isDigit() }?.toIntOrNull()?.takeIf { it in 1..31 }
+                } else null
+
+                val candidate = PortfolioPositionEntity(
+                    portfolioType = "REAL",
+                    ticker = rawTicker,
+                    name = row.getOrNull(nameIdx)?.takeIf { it.isNotBlank() } ?: rawTicker,
+                    assetClass = assetClass.name,
+                    quantity = validQty,
+                    averagePrice = validPm,
+                    currentPrice = currentPrice ?: 0.0,
+                    hasMarketPrice = hasMarketPrice,
+                    sector = row.getOrNull(sectorIdx)?.takeIf { it.isNotBlank() } ?: "Importado",
+                    dataComDay = dataComDay,
+                    dataSourceLabel = "Importação $fileType ($fileName)",
+                    isDemo = false
+                )
+
+                val existing = aggregated[rawTicker]
+                if (existing == null) {
+                    aggregated[rawTicker] = candidate
+                } else {
+                    val totalQty = existing.quantity + candidate.quantity
+                    val weightedPm = ((existing.quantity * existing.averagePrice) + (candidate.quantity * candidate.averagePrice)) / totalQty
+                    val resolvedPrice = when {
+                        candidate.hasMarketPrice -> candidate.currentPrice
+                        existing.hasMarketPrice -> existing.currentPrice
+                        else -> 0.0
+                    }
+                    val resolvedHasPrice = candidate.hasMarketPrice || existing.hasMarketPrice
+                    aggregated[rawTicker] = existing.copy(
+                        quantity = totalQty,
+                        averagePrice = weightedPm,
+                        currentPrice = resolvedPrice,
+                        hasMarketPrice = resolvedHasPrice,
+                        name = if (existing.name == existing.ticker && candidate.name != candidate.ticker) candidate.name else existing.name,
+                        sector = if (existing.sector == "Importado" && candidate.sector != "Importado") candidate.sector else existing.sector,
+                        dataComDay = existing.dataComDay ?: candidate.dataComDay
+                    )
+                    warnings.add("$rawTicker consolidado em lote único (quantidade somada e PM ponderado).")
+                }
             }
 
-            val currentPrice = if (curIdx != -1) parseBrNumber(row.getOrNull(curIdx)) else null
-            val hasMarketPrice = currentPrice != null && currentPrice > 0.0
-
-            val assetClass = inferAssetClass(
-                rawClass = row.getOrNull(classIdx).orEmpty(),
-                ticker = rawTicker
-            )
-            val dataComDay = if (dataComIdx != -1) {
-                row.getOrNull(dataComIdx)?.filter { it.isDigit() }?.toIntOrNull()?.takeIf { it in 1..31 }
+            // Extrai dividendo / provento da linha (combinada com posição OU linha extra só de dividendo)
+            val rawTotalDiv = if (divValueIdx != -1 && divValueIdx != divPerUnitIdx) {
+                parseBrNumber(row.getOrNull(divValueIdx))
+            } else null
+            val rawUnitDiv = if (divPerUnitIdx != -1) {
+                parseBrNumber(row.getOrNull(divPerUnitIdx))
             } else null
 
-            val candidate = PortfolioPositionEntity(
-                portfolioType = "REAL",
-                ticker = rawTicker,
-                name = row.getOrNull(nameIdx)?.takeIf { it.isNotBlank() } ?: rawTicker,
-                assetClass = assetClass.name,
-                quantity = qty,
-                averagePrice = pm,
-                currentPrice = currentPrice ?: 0.0,
-                hasMarketPrice = hasMarketPrice,
-                sector = row.getOrNull(sectorIdx)?.takeIf { it.isNotBlank() } ?: "Importado",
-                dataComDay = dataComDay,
-                dataSourceLabel = "Importação $fileType ($fileName)",
-                isDemo = false
-            )
+            val resolvedQtyForDiv = (qty?.takeIf { it > 0.0 })
+                ?: aggregated[rawTicker]?.quantity?.takeIf { it > 0.0 }
+                ?: 1.0
 
-            val existing = aggregated[rawTicker]
-            if (existing == null) {
-                aggregated[rawTicker] = candidate
-            } else {
-                val totalQty = existing.quantity + candidate.quantity
-                val weightedPm = ((existing.quantity * existing.averagePrice) + (candidate.quantity * candidate.averagePrice)) / totalQty
-                val resolvedPrice = when {
-                    candidate.hasMarketPrice -> candidate.currentPrice
-                    existing.hasMarketPrice -> existing.currentPrice
-                    else -> 0.0
+            val (finalDivTotal, divUnitQtyPair) = when {
+                rawTotalDiv != null && rawTotalDiv > 0.0 -> rawTotalDiv to (1.0 to rawTotalDiv)
+                rawUnitDiv != null && rawUnitDiv > 0.0 -> {
+                    val total = rawUnitDiv * resolvedQtyForDiv
+                    total to (resolvedQtyForDiv to rawUnitDiv)
                 }
-                val resolvedHasPrice = candidate.hasMarketPrice || existing.hasMarketPrice
-                aggregated[rawTicker] = existing.copy(
-                    quantity = totalQty,
-                    averagePrice = weightedPm,
-                    currentPrice = resolvedPrice,
-                    hasMarketPrice = resolvedHasPrice,
-                    name = if (existing.name == existing.ticker && candidate.name != candidate.ticker) candidate.name else existing.name,
-                    sector = if (existing.sector == "Importado" && candidate.sector != "Importado") candidate.sector else existing.sector,
-                    dataComDay = existing.dataComDay ?: candidate.dataComDay
+                else -> null to (1.0 to 0.0)
+            }
+
+            if (finalDivTotal != null && finalDivTotal > 0.0) {
+                val rawDivDate = if (divDateIdx != -1) row.getOrNull(divDateIdx).orEmpty() else ""
+                val normalizedDivDate = normalizeSpreadsheetDate(rawDivDate) ?: todayFormatted
+                val rawEvent = if (divTypeIdx != -1) row.getOrNull(divTypeIdx)?.trim().orEmpty() else ""
+                val eventLabel = rawEvent.ifBlank { "Provento" }
+                val refId = "DIV_IMPORT:$rawTicker:$normalizedDivDate:${String.format(Locale.US, "%.2f", finalDivTotal)}"
+
+                importedDividends.add(
+                    PortfolioOperationEntity(
+                        portfolioType = PortfolioType.REAL.name,
+                        ticker = rawTicker,
+                        operationType = OperationType.PROVENTO.name,
+                        quantity = divUnitQtyPair.first,
+                        unitPrice = divUnitQtyPair.second,
+                        totalValue = finalDivTotal,
+                        dateIso = normalizedDivDate,
+                        notes = "$eventLabel • Planilha $fileType ($fileName)",
+                        externalRefId = refId
+                    )
                 )
-                warnings.add("$rawTicker consolidado em lote único (quantidade somada e PM ponderado).")
+            } else if (!hasValidPosition) {
+                warnings.add("Linha ${idx + 2} ($rawTicker) ignorada: quantidade/PM e valor de dividendo inválidos.")
             }
         }
 
@@ -469,8 +561,35 @@ object SpreadsheetImporter {
             positions = finalPositions,
             cashBalanceBrl = detectedCash,
             warnings = warnings.distinct(),
-            detectedColumns = headers
+            detectedColumns = headers,
+            dividends = importedDividends.distinctBy { it.externalRefId }
         )
+    }
+
+    private fun normalizeSpreadsheetDate(raw: String): String? {
+        val trimmed = raw.trim()
+        if (trimmed.isBlank()) return null
+
+        // Suporte a número serial de data do Excel (ex: 46341 -> dd/MM/yyyy)
+        val serial = trimmed.replace(",", ".").toDoubleOrNull()
+        if (serial != null && serial in 20000.0..90000.0 && !trimmed.contains("/") && !trimmed.contains("-")) {
+            val cal = Calendar.getInstance().apply {
+                set(1899, Calendar.DECEMBER, 30, 12, 0, 0)
+                add(Calendar.DAY_OF_YEAR, serial.toInt())
+            }
+            return SimpleDateFormat("dd/MM/yyyy", Locale("pt", "BR")).format(cal.time)
+        }
+
+        val outFmt = SimpleDateFormat("dd/MM/yyyy", Locale("pt", "BR"))
+        val clean = trimmed.substringBefore(" ")
+        for (pattern in listOf("dd/MM/yyyy", "yyyy-MM-dd", "dd-MM-yyyy", "dd/MM/yy")) {
+            runCatching {
+                val fmt = SimpleDateFormat(pattern, Locale.US).apply { isLenient = false }
+                val parsed = fmt.parse(clean)
+                if (parsed != null) return outFmt.format(parsed)
+            }
+        }
+        return null
     }
 
     private fun normalizeHeader(value: String): String {

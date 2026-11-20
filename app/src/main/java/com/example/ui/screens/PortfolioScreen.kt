@@ -189,7 +189,8 @@ fun PortfolioScreen(
                 item {
                     FintechCard(borderColor = ElectricCyan.copy(alpha = 0.5f)) {
                         Text("Resultado da Importação: ${importFeedback.fileName}", style = MaterialTheme.typography.titleSmall, color = ElectricCyan)
-                        Text("${importFeedback.positions.size} posições importadas (${importFeedback.fileType}).", style = MaterialTheme.typography.bodySmall)
+                        val divTxt = if (importFeedback.dividends.isNotEmpty()) " e ${importFeedback.dividends.size} provento(s)" else ""
+                        Text("${importFeedback.positions.size} posições$divTxt importadas (${importFeedback.fileType}).", style = MaterialTheme.typography.bodySmall)
                         importFeedback.warnings.take(4).forEach { w ->
                             Text("• $w", style = MaterialTheme.typography.bodySmall, color = AmberGold)
                         }
@@ -343,7 +344,7 @@ fun PortfolioScreen(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "Formato CSV/XLSX aceito: colunas Ticker, Nome, Classe, Quantidade, Preço Médio, Preço Atual (opcional), Setor (opcional), Data-Com (opcional) e linha CAIXA.",
+                            "Formato CSV/XLSX aceito: colunas Ticker, Nome, Classe, Quantidade, Preço Médio, Preço Atual (opc.), Setor, Data-Com, Dividendo Valor, Data Provento, Tipo Provento e linha CAIXA.",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextSecondary
                         )

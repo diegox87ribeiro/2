@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.outlined.FilterAltOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -42,8 +43,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.data.local.StrategyCriteriaEntity
 import com.example.domain.model.AssetClass
+import com.example.domain.model.FundamentalFilterCriteria
 import com.example.domain.model.LiveQuoteLookupState
 import com.example.domain.model.MarketAsset
+import com.example.domain.model.ValuationAndComparisonCalculator
+import kotlin.math.roundToInt
 import com.example.ui.components.AssetDetailSheetContent
 import com.example.ui.components.DataDisclaimerBanner
 import com.example.ui.components.FilterChipBar
@@ -92,20 +96,25 @@ fun FundamentalAnalysisScreen(
             .take(14)
     }
 
-    val scoredAssets = remember(state.marketAssets, minDy, maxPvp, minLiq, maxInad, minRoe) {
-        state.marketAssets
-            .filter { it.assetClass != AssetClass.RENDA_FIXA }
-            .map { asset ->
-                var score = 0
-                val reasons = mutableListOf<String>()
-                if (asset.dy12m >= minDy) { score += 25; reasons.add("DY OK") }
-                if (asset.pvp <= maxPvp && asset.pvp > 0) { score += 25; reasons.add("P/VP OK") }
-                if (asset.liquidezDiariaMilhoes >= minLiq) { score += 20; reasons.add("Liquidez OK") }
-                if (asset.inadimplenciaPercent <= maxInad) { score += 15; reasons.add("Inadimplência OK") }
-                if (asset.assetClass != AssetClass.ACOES_BR || asset.roe >= minRoe) { score += 15; reasons.add("Qualidade OK") }
-                Triple(asset, score, reasons)
-            }
-            .sortedByDescending { it.second }
+    val filterCriteria = remember(minDy, maxPvp, minLiq, maxInad, minRoe) {
+        FundamentalFilterCriteria(
+            minDyPercent = minDy.toDouble(),
+            maxPvp = maxPvp.toDouble(),
+            minDailyLiquidityMillions = minLiq.toDouble(),
+            maxInadimplenciaPercent = maxInad.toDouble(),
+            minRoePercent = minRoe.toDouble()
+        )
+    }
+
+    val totalEligibleCount = remember(state.marketAssets) {
+        state.marketAssets.count { it.assetClass != AssetClass.RENDA_FIXA }
+    }
+
+    val rankedAssets = remember(state.marketAssets, filterCriteria) {
+        ValuationAndComparisonCalculator.filterFundamentalRanking(
+            assets = state.marketAssets,
+            criteria = filterCriteria
+        )
     }
 
     val inspectedAsset = inspectedTicker?.let { ticker ->
@@ -140,19 +149,39 @@ fun FundamentalAnalysisScreen(
                 Spacer(Modifier.height(8.dp))
 
                 Text("DY Mínimo: ${"%.1f".format(minDy)}%", style = MonoValueStyle, color = EmeraldPrimary)
-                Slider(value = minDy, onValueChange = { minDy = it }, valueRange = 0f..16f)
+                Slider(
+                    value = minDy,
+                    onValueChange = { minDy = (it * 10f).roundToInt() / 10f },
+                    valueRange = 0f..16f
+                )
 
                 Text("P/VP Máximo: ${"%.2f".format(maxPvp)}x", style = MonoValueStyle, color = ElectricCyan)
-                Slider(value = maxPvp, onValueChange = { maxPvp = it }, valueRange = 0.6f..4.0f)
+                Slider(
+                    value = maxPvp,
+                    onValueChange = { maxPvp = (it * 100f).roundToInt() / 100f },
+                    valueRange = 0.6f..4.0f
+                )
 
                 Text("Liquidez Diária Mínima: R$ ${"%.1f".format(minLiq)}M", style = MonoValueStyle, color = AmberGold)
-                Slider(value = minLiq, onValueChange = { minLiq = it }, valueRange = 0.5f..50f)
+                Slider(
+                    value = minLiq,
+                    onValueChange = { minLiq = (it * 10f).roundToInt() / 10f },
+                    valueRange = 0.5f..50f
+                )
 
                 Text("Inadimplência Máxima: ${"%.1f".format(maxInad)}%", style = MonoValueStyle, color = CoralRed)
-                Slider(value = maxInad, onValueChange = { maxInad = it }, valueRange = 0f..10f)
+                Slider(
+                    value = maxInad,
+                    onValueChange = { maxInad = (it * 10f).roundToInt() / 10f },
+                    valueRange = 0f..10f
+                )
 
                 Text("ROE Mínimo (Ações): ${"%.1f".format(minRoe)}%", style = MonoValueStyle)
-                Slider(value = minRoe, onValueChange = { minRoe = it }, valueRange = 0f..30f)
+                Slider(
+                    value = minRoe,
+                    onValueChange = { minRoe = (it * 10f).roundToInt() / 10f },
+                    valueRange = 0f..30f
+                )
 
                 OutlinedTextField(
                     value = changeReason,
@@ -191,13 +220,30 @@ fun FundamentalAnalysisScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    "Ranking Fundamentalista",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f)
-                )
+                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                    Text(
+                        "Ranking Fundamentalista (${rankedAssets.size}/$totalEligibleCount)",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.testTag("fundamental_ranking_header")
+                    )
+                    Text(
+                        "Visíveis apenas ativos que atendem a todos os filtros",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextSecondary
+                    )
+                }
                 OutlinedButton(
-                    onClick = { onRefreshLiveBatch(scoredAssets.take(12).map { it.first.ticker }) },
+                    onClick = {
+                        val tickersToRefresh = if (rankedAssets.isNotEmpty()) {
+                            rankedAssets.take(12).map { it.asset.ticker }
+                        } else {
+                            state.marketAssets
+                                .filter { it.assetClass != AssetClass.RENDA_FIXA }
+                                .take(12)
+                                .map { it.ticker }
+                        }
+                        onRefreshLiveBatch(tickersToRefresh)
+                    },
                     enabled = !state.isLiveBatchRefreshing,
                     modifier = Modifier.heightIn(min = 48.dp).testTag("refresh_live_catalog_button")
                 ) {
@@ -214,47 +260,94 @@ fun FundamentalAnalysisScreen(
             }
         }
 
-        items(scoredAssets, key = { it.first.ticker }) { (asset, score, reasons) ->
-            FintechCard(
-                modifier = Modifier.clickable {
-                    inspectedTicker = asset.ticker
-                    onQueryLiveQuote(asset.ticker)
-                }
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("${asset.ticker} • ${asset.name}", style = MaterialTheme.typography.titleSmall)
-                            if (!asset.isDemoData) {
-                                Spacer(Modifier.width(6.dp))
-                                Text("• AO VIVO", style = MaterialTheme.typography.labelSmall, color = EmeraldPrimary)
-                            }
-                        }
+        if (rankedAssets.isEmpty()) {
+            item {
+                FintechCard(modifier = Modifier.testTag("fundamental_ranking_empty_card")) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.FilterAltOff,
+                            contentDescription = "Nenhum ativo compatível com o filtro",
+                            tint = AmberGold,
+                            modifier = Modifier.size(32.dp)
+                        )
                         Text(
-                            "${formatBrl(asset.price)} (${formatPct(asset.changePercent1d)}) • DY ${formatPct(asset.dy12m, false)} • P/VP ${"%.2f".format(asset.pvp)}x • Liq R$${"%.1f".format(asset.liquidezDiariaMilhoes)}M",
+                            "Nenhum ativo atende a todos os filtros ativos",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            "Ajuste DY mínimo, P/VP máximo, liquidez, inadimplência ou ROE para exibir os ativos compatíveis no ranking.",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextSecondary
                         )
-                        Text(
-                            (reasons.ifEmpty { listOf("Toque para consultar ao vivo") }).joinToString(" • "),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = ElectricCyan
-                        )
+                        OutlinedButton(
+                            onClick = {
+                                val defaults = StrategyCriteriaEntity()
+                                minDy = defaults.minDyPercent.toFloat()
+                                maxPvp = defaults.maxPvp.toFloat()
+                                minLiq = defaults.minDailyLiquidityMillions.toFloat()
+                                maxInad = defaults.maxInadimplenciaPercent.toFloat()
+                                minRoe = defaults.minRoePercent.toFloat()
+                            },
+                            modifier = Modifier.heightIn(min = 48.dp).testTag("reset_fundamental_filters_button")
+                        ) {
+                            Text("Restaurar Filtros Padrão")
+                        }
                     }
-                    Surface(
-                        shape = MaterialTheme.shapes.small,
-                        color = if (score >= 80) EmeraldContainer else MaterialTheme.colorScheme.surfaceVariant
+                }
+            }
+        } else {
+            items(rankedAssets, key = { it.asset.ticker }) { item ->
+                val asset = item.asset
+                val valuation = item.valuation
+                val score = item.score
+                FintechCard(
+                    modifier = Modifier
+                        .testTag("fundamental_asset_card_${asset.ticker}")
+                        .clickable {
+                            inspectedTicker = asset.ticker
+                            onQueryLiveQuote(asset.ticker)
+                        }
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            "$score/100",
-                            style = MonoValueStyle,
-                            color = if (score >= 80) EmeraldPrimary else AmberGold,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("${asset.ticker} • ${asset.name}", style = MaterialTheme.typography.titleSmall)
+                                if (!asset.isDemoData) {
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("• AO VIVO", style = MaterialTheme.typography.labelSmall, color = EmeraldPrimary)
+                                }
+                            }
+                            Text(
+                                "${formatBrl(asset.price)} (${formatPct(asset.changePercent1d)}) • DY ${formatPct(asset.dy12m, false)} • P/VP ${"%.2f".format(asset.pvp)}x • Liq R$${"%.1f".format(asset.liquidezDiariaMilhoes)}M",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary
+                            )
+                            val bazinText = valuation.bazinCeilingPriceBrl?.let { " • Teto Bazin ${formatBrl(it)}" }.orEmpty()
+                            Text(
+                                "Atende filtros • ${item.matchedLabels.take(3).joinToString(" • ")}$bazinText",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ElectricCyan
+                            )
+                        }
+                        Surface(
+                            shape = MaterialTheme.shapes.small,
+                            color = if (score >= 80) EmeraldContainer else MaterialTheme.colorScheme.surfaceVariant
+                        ) {
+                            Text(
+                                "$score/100",
+                                style = MonoValueStyle,
+                                color = if (score >= 80) EmeraldPrimary else AmberGold,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
                     }
                 }
             }

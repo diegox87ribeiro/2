@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.CalendarMonth
@@ -27,14 +29,17 @@ import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,11 +47,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import com.example.domain.model.AssetClass
 import com.example.domain.model.ComparisonSeriesBuilder
 import com.example.domain.model.DataComGroup
 import com.example.domain.model.DividendMonitorCalculator
+import com.example.domain.model.LiveQuoteLookupState
 import com.example.ui.components.DataDisclaimerBanner
 import com.example.ui.components.FintechCard
 import com.example.ui.components.HorizontalBarDistribution
@@ -77,7 +85,8 @@ fun DashboardScreen(
     onOpenDataComGroup: (DataComGroup) -> Unit = {},
     onOpenPortfolioClass: (AssetClass) -> Unit = {},
     onToggleHideBanners: (Boolean) -> Unit = {},
-    onRecordDividend: (ticker: String, totalReceivedBrl: Double, notes: String) -> Unit = { _, _, _ -> }
+    onRecordDividend: (ticker: String, totalReceivedBrl: Double, notes: String) -> Unit = { _, _, _ -> },
+    onQueryLiveQuote: (String) -> Unit = {}
 ) {
     val realHhi = state.realHhi
     val hasRealData = state.realPositions.isNotEmpty()
@@ -114,24 +123,107 @@ fun DashboardScreen(
         )
     }
 
-    var selectedComparisonIds by remember(comparisonCandidates) {
-        val defaultIds = comparisonCandidates
-            .filter {
-                it.id.startsWith("BENCH:CDI") ||
-                    it.id.startsWith("BENCH:IBOV") ||
-                    it.id.startsWith("BENCH:BTC") ||
-                    it.groupLabel == "Carteira Real"
+    var selectedComparisonIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var hasSeededComparisonDefaults by remember { mutableStateOf(false) }
+    var compareTickerInput by remember { mutableStateOf("") }
+    var pendingCompareTickers by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var compareFeedback by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(comparisonCandidates) {
+        val validIds = comparisonCandidates.map { it.id }.toSet()
+        if (!hasSeededComparisonDefaults && comparisonCandidates.isNotEmpty()) {
+            val defaultIds = comparisonCandidates
+                .filter {
+                    it.id.startsWith("BENCH:CDI") ||
+                        it.id.startsWith("BENCH:IBOV") ||
+                        it.id.startsWith("BENCH:BTC") ||
+                        it.groupLabel == "Carteira Real"
+                }
+                .take(5)
+                .map { it.id }
+                .ifEmpty { comparisonCandidates.take(4).map { it.id } }
+                .toSet()
+            selectedComparisonIds = defaultIds
+            hasSeededComparisonDefaults = true
+        } else {
+            val retained = selectedComparisonIds.filter { it in validIds }.toSet()
+            val resolvedPending = mutableSetOf<String>()
+            val newIds = pendingCompareTickers.mapNotNull { pending ->
+                val match = comparisonCandidates.firstOrNull {
+                    it.shortLabel.equals(pending, ignoreCase = true) ||
+                        it.id.equals("ASSET:$pending", ignoreCase = true) ||
+                        it.id.equals("BENCH:$pending", ignoreCase = true)
+                }
+                if (match != null) {
+                    resolvedPending.add(pending)
+                    match.id
+                } else {
+                    null
+                }
+            }.toSet()
+            if (resolvedPending.isNotEmpty()) {
+                pendingCompareTickers = pendingCompareTickers - resolvedPending
+                compareFeedback = "Adicionado ao comparativo: ${resolvedPending.joinToString(", ")}"
             }
-            .take(5)
-            .map { it.id }
-            .ifEmpty { comparisonCandidates.take(4).map { it.id } }
-            .toSet()
-        mutableStateOf(defaultIds)
+            val merged = retained + newIds
+            if (merged.isNotEmpty()) {
+                selectedComparisonIds = merged
+            }
+        }
+    }
+
+    LaunchedEffect(state.liveLookupState) {
+        val err = state.liveLookupState as? LiveQuoteLookupState.Error
+        if (err != null && err.ticker.uppercase() in pendingCompareTickers) {
+            pendingCompareTickers = pendingCompareTickers - err.ticker.uppercase()
+            compareFeedback = err.message
+        }
+    }
+
+    fun submitCompareTickerInput() {
+        val tokens = compareTickerInput
+            .split(',', ';', ' ')
+            .map { it.trim().uppercase() }
+            .filter { it.isNotBlank() }
+        if (tokens.isEmpty()) return
+
+        var updatedIds = selectedComparisonIds
+        val missingLive = mutableListOf<String>()
+        val foundLabels = mutableListOf<String>()
+
+        tokens.forEach { token ->
+            val match = comparisonCandidates.firstOrNull {
+                it.shortLabel.equals(token, ignoreCase = true) ||
+                    it.id.equals("ASSET:$token", ignoreCase = true) ||
+                    it.id.equals("BENCH:$token", ignoreCase = true)
+            }
+            if (match != null) {
+                updatedIds = updatedIds + match.id
+                foundLabels.add(match.shortLabel)
+            } else {
+                missingLive.add(token)
+            }
+        }
+
+        selectedComparisonIds = updatedIds
+        if (missingLive.isNotEmpty()) {
+            pendingCompareTickers = pendingCompareTickers + missingLive.toSet()
+            missingLive.forEach { onQueryLiveQuote(it) }
+            compareFeedback = "Buscando ${missingLive.joinToString(", ")} em tempo real (B3 / ADVFN / Yahoo)..."
+        } else if (foundLabels.isNotEmpty()) {
+            compareFeedback = "Comparando: ${foundLabels.joinToString(", ")}"
+        }
+        compareTickerInput = ""
     }
 
     val activeComparisonSeries = remember(comparisonCandidates, selectedComparisonIds) {
         val chosen = comparisonCandidates.filter { it.id in selectedComparisonIds }.map { it.series }
         chosen.ifEmpty { comparisonCandidates.take(3).map { it.series } }
+    }
+
+    val visibleComparisonChips = remember(comparisonCandidates, selectedComparisonIds) {
+        val selectedFirst = comparisonCandidates.filter { it.id in selectedComparisonIds }
+        (selectedFirst + comparisonCandidates.take(14)).distinctBy { it.id }
     }
 
     LazyColumn(
@@ -329,19 +421,76 @@ fun DashboardScreen(
         }
 
         item {
-            FintechCard {
+            FintechCard(modifier = Modifier.testTag("dashboard_comparison_card")) {
                 Text("Comparativo de Ativos & Benchmarks (Base 100)", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "Escolha os ativos da Carteira Real, mercado e benchmarks para comparar no gráfico",
+                    "Digite qualquer ticker (ex: PETR4, VALE3, ITUB4) ou toque nos atalhos para comparar no gráfico",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary
                 )
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = compareTickerInput,
+                        onValueChange = { compareTickerInput = it.uppercase() },
+                        label = { Text("Ticker para comparar (ex: PETR4, WEGE3)") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Characters,
+                            imeAction = ImeAction.Search
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onSearch = { submitCompareTickerInput() }
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("dashboard_compare_ticker_input")
+                    )
+                    Button(
+                        onClick = { submitCompareTickerInput() },
+                        enabled = compareTickerInput.isNotBlank(),
+                        modifier = Modifier
+                            .heightIn(min = 52.dp)
+                            .testTag("dashboard_compare_ticker_button"),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = EmeraldPrimary,
+                            contentColor = EmeraldOnPrimary
+                        )
+                    ) {
+                        Text("Comparar")
+                    }
+                }
+                if (compareFeedback != null) {
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        if (pendingCompareTickers.isNotEmpty() && state.liveLookupState is LiveQuoteLookupState.Loading) {
+                            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                        }
+                        Text(
+                            compareFeedback.orEmpty(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (compareFeedback.orEmpty().contains("Não foi possível") || compareFeedback.orEmpty().contains("Erro")) {
+                                CoralRed
+                            } else {
+                                ElectricCyan
+                            },
+                            modifier = Modifier.testTag("dashboard_compare_feedback")
+                        )
+                    }
+                }
                 Spacer(Modifier.height(10.dp))
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    comparisonCandidates.take(14).forEach { candidate ->
+                    visibleComparisonChips.forEach { candidate ->
                         val isSelected = candidate.id in selectedComparisonIds
                         FilterChip(
                             selected = isSelected,

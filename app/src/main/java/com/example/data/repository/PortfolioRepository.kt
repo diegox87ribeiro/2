@@ -111,17 +111,26 @@ class PortfolioRepository(
     }
 
     suspend fun commitRealPortfolioImport(result: ImportParseResult) {
-        if (result.positions.isEmpty()) return
-        val history = ImportHistoryEntity(
-            fileName = result.fileName,
-            fileType = result.fileType,
-            recordCount = result.positions.size,
-            cashBalanceBrl = result.cashBalanceBrl ?: 0.0,
-            isActiveRealReference = true,
-            isDemoData = false,
-            notes = if (result.warnings.isEmpty()) "Importação limpa sem alertas." else result.warnings.joinToString(" | ")
-        )
-        portfolioDao.replaceRealPortfolioFromImport(history, result.positions)
+        if (result.positions.isEmpty() && result.dividends.isEmpty()) return
+        if (result.positions.isNotEmpty()) {
+            val history = ImportHistoryEntity(
+                fileName = result.fileName,
+                fileType = result.fileType,
+                recordCount = result.positions.size,
+                cashBalanceBrl = result.cashBalanceBrl ?: 0.0,
+                isActiveRealReference = true,
+                isDemoData = false,
+                notes = if (result.warnings.isEmpty()) "Importação limpa sem alertas." else result.warnings.joinToString(" | ")
+            )
+            portfolioDao.replaceRealPortfolioFromImport(history, result.positions)
+        }
+        if (result.dividends.isNotEmpty()) {
+            val existingRefs = portfolioDao.getExistingExternalRefIds().toHashSet()
+            val newDivs = result.dividends.filter { it.externalRefId.isBlank() || it.externalRefId !in existingRefs }
+            if (newDivs.isNotEmpty()) {
+                portfolioDao.insertOperations(newDivs)
+            }
+        }
         result.cashBalanceBrl?.let { prefs.setCashRealBrl(it) }
     }
 

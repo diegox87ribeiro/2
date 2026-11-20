@@ -22,6 +22,13 @@ data class AssetDividendRow(
     val hasEstimateData: Boolean
 )
 
+data class MonthlyDividendPoint(
+    val monthIndex: Int,
+    val monthLabel: String,
+    val receivedBrl: Double,
+    val projectedBrl: Double
+)
+
 data class DividendMonitorSummary(
     val receivedMonthlyBrl: Double,
     val receivedAnnualBrl: Double,
@@ -32,12 +39,17 @@ data class DividendMonitorSummary(
     val projectedAnnualDyPercent: Double,
     val projectedYieldOnCostPercent: Double,
     val perAssetRows: List<AssetDividendRow>,
-    val receivedOperationsCount: Int
+    val receivedOperationsCount: Int,
+    val monthlyJanToDec: List<MonthlyDividendPoint> = emptyList()
 )
 
 object DividendMonitorCalculator {
 
     private val dateFormats = listOf("dd/MM/yyyy", "yyyy-MM-dd", "dd/MM/yy")
+    private val monthLabelsPt = listOf(
+        "Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
+        "Jul", "Ago", "Set", "Out", "Nov", "Dez"
+    )
 
     fun compute(
         realPositions: List<PortfolioItemView>,
@@ -61,6 +73,7 @@ object DividendMonitorCalculator {
 
         val receivedMonthByTicker = mutableMapOf<String, Double>()
         val receivedAnnualByTicker = mutableMapOf<String, Double>()
+        val receivedByCalendarMonth = DoubleArray(12)
 
         for (op in proventoOps) {
             val ticker = op.ticker.trim().uppercase()
@@ -68,9 +81,14 @@ object DividendMonitorCalculator {
 
             val parsedMillis = parseOperationDateMillis(op.dateIso) ?: op.createdAt
             val opCal = Calendar.getInstance().apply { timeInMillis = parsedMillis }
+            val opYear = opCal.get(Calendar.YEAR)
+            val opMonth = opCal.get(Calendar.MONTH)
 
-            if (opCal.get(Calendar.YEAR) == currentYear && opCal.get(Calendar.MONTH) == currentMonth) {
+            if (opYear == currentYear && opMonth == currentMonth) {
                 receivedMonthByTicker[ticker] = (receivedMonthByTicker[ticker] ?: 0.0) + op.totalValue
+            }
+            if (opYear == currentYear && opMonth in 0..11) {
+                receivedByCalendarMonth[opMonth] += op.totalValue
             }
             if (parsedMillis >= oneYearAgoMillis) {
                 receivedAnnualByTicker[ticker] = (receivedAnnualByTicker[ticker] ?: 0.0) + op.totalValue
@@ -80,6 +98,8 @@ object DividendMonitorCalculator {
         val catalogByTicker = marketAssets.associateBy { it.ticker.trim().uppercase() }
         val groupedPositions = realPositions.groupBy { it.ticker.trim().uppercase() }
         val allTickers = (groupedPositions.keys + receivedAnnualByTicker.keys + receivedMonthByTicker.keys).distinct()
+
+        val projectedByCalendarMonth = DoubleArray(12)
 
         val rows = allTickers.map { ticker ->
             val lots = groupedPositions[ticker].orEmpty()
@@ -131,6 +151,24 @@ object DividendMonitorCalculator {
                 }
             }
 
+            if (projAnnual > 0.0) {
+                val assetCls = firstLot?.assetClass ?: catalog?.assetClass ?: AssetClass.ACOES_BR
+                val isMonthly = assetCls == AssetClass.FII ||
+                    assetCls == AssetClass.FIAGRO ||
+                    (catalog != null && catalog.dividendHistory6m.count { it > 0.0 } >= 5)
+                if (isMonthly) {
+                    val perMonth = projAnnual / 12.0
+                    for (m in 0..11) projectedByCalendarMonth[m] += perMonth
+                } else {
+                    val anchor = ((firstLot?.dataComDay ?: catalog?.dataComDay ?: 3) % 3)
+                    val quarterlyMonths = listOf(anchor, anchor + 3, anchor + 6, anchor + 9)
+                    val perQuarter = projAnnual / quarterlyMonths.size
+                    quarterlyMonths.forEach { m ->
+                        if (m in 0..11) projectedByCalendarMonth[m] += perQuarter
+                    }
+                }
+            }
+
             val yoc = if (costVal > 0.0 && projAnnual > 0.0) (projAnnual / costVal) * 100.0 else 0.0
 
             AssetDividendRow(
@@ -153,6 +191,15 @@ object DividendMonitorCalculator {
                 .thenBy { it.ticker }
         )
 
+        val monthlySeries = (0..11).map { m ->
+            MonthlyDividendPoint(
+                monthIndex = m,
+                monthLabel = monthLabelsPt[m],
+                receivedBrl = receivedByCalendarMonth[m],
+                projectedBrl = projectedByCalendarMonth[m]
+            )
+        }
+
         val totalInvested = realPositions.sumOf { it.totalCurrentBrl }.coerceAtLeast(0.0)
         val totalCost = realPositions.sumOf { it.totalCostBrl }.coerceAtLeast(0.0)
         val receivedMonthly = rows.sumOf { it.receivedMonthBrl }
@@ -173,7 +220,8 @@ object DividendMonitorCalculator {
             projectedAnnualDyPercent = projectedDy,
             projectedYieldOnCostPercent = projectedYoc,
             perAssetRows = rows,
-            receivedOperationsCount = proventoOps.size
+            receivedOperationsCount = proventoOps.size,
+            monthlyJanToDec = monthlySeries
         )
     }
 

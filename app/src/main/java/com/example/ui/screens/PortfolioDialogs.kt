@@ -78,7 +78,11 @@ fun ImportPreviewDialog(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
-                    "Ao confirmar, esta importação substituirá a Carteira Real atual e será gravada como a referência oficial mais recente.",
+                    if (preview.positions.isNotEmpty()) {
+                        "Ao confirmar, esta importação substituirá a Carteira Real atual, gravando os ativos e os proventos detectados na tabela."
+                    } else {
+                        "Ao confirmar, os proventos detectados na planilha serão adicionados ao histórico da Carteira Real (sem alterar posições)."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary
                 )
@@ -87,7 +91,12 @@ fun ImportPreviewDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("${preview.positions.size} ativos válidos", style = MaterialTheme.typography.labelLarge, color = EmeraldPrimary)
+                    Text(
+                        "${preview.positions.size} ativos • ${preview.dividends.size} provento(s)",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = EmeraldPrimary,
+                        modifier = Modifier.testTag("preview_counts_label")
+                    )
                     preview.cashBalanceBrl?.let {
                         Text("Caixa: ${formatBrl(it)}", style = MonoValueStyle, color = ElectricCyan)
                     }
@@ -147,6 +156,38 @@ fun ImportPreviewDialog(
                                 Text("Sem cotação", style = MaterialTheme.typography.labelSmall, color = AmberGold)
                             }
                         }
+                    }
+                }
+
+                if (preview.dividends.isNotEmpty()) {
+                    HorizontalDivider(color = SubtleBorder)
+                    Text(
+                        "Proventos / Dividendos Detectados (${preview.dividends.size})",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = ElectricCyan
+                    )
+                    preview.dividends.take(8).forEach { divOp ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(ElectricCyan.copy(alpha = 0.08f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(divOp.ticker, style = MaterialTheme.typography.labelLarge, color = ElectricCyan)
+                                Text("${divOp.dateIso} • ${divOp.notes.substringBefore(" •")}", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                            }
+                            Text(formatBrl(divOp.totalValue), style = MonoValueStyle, color = EmeraldPrimary)
+                        }
+                    }
+                    if (preview.dividends.size > 8) {
+                        Text(
+                            "... e mais ${preview.dividends.size - 8} provento(s).",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextSecondary
+                        )
                     }
                 }
             }

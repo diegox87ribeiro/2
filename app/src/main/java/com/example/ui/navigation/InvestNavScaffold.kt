@@ -84,6 +84,7 @@ import com.example.domain.model.OperationType
 import com.example.domain.model.PortfolioType
 import com.example.ui.screens.AiAgentsScreen
 import com.example.ui.screens.AssetClassExplorerScreen
+import com.example.ui.screens.AssetComparatorScreen
 import com.example.ui.screens.CryptoScreen
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.DataComGroupDetailScreen
@@ -92,9 +93,11 @@ import com.example.ui.screens.FundamentalAnalysisScreen
 import com.example.ui.screens.PortfolioClassDetailScreen
 import com.example.ui.screens.PortfolioScreen
 import com.example.ui.screens.ProfitChartSyncScreen
+import com.example.ui.screens.RebalanceAdvisorScreen
 import com.example.ui.screens.ReportsAndArchitectureScreen
 import com.example.ui.screens.RiskHhiScreen
 import com.example.ui.screens.SimulatorScreen
+import com.example.ui.screens.TaxDarfScreen
 import com.example.ui.screens.TechnicalAnalysisScreen
 import com.example.ui.theme.DeepNavySurface
 import com.example.ui.theme.EmeraldContainer
@@ -493,7 +496,8 @@ private fun MainScaffoldBody(
                                     unitPrice = totalBrl,
                                     notes = notes.ifBlank { "Provento recebido" }
                                 )
-                            }
+                            },
+                            onQueryLiveQuote = viewModel::queryLiveAssetQuote
                         )
                     }
                     composable(InvestRoutes.ROUTE_CARTEIRA) {
@@ -641,6 +645,24 @@ private fun MainScaffoldBody(
                             onSyncNow = viewModel::syncProfitChartNow,
                             onImportExportedFile = viewModel::importProfitChartFile,
                             onDisconnect = viewModel::disconnectProfitChart
+                        )
+                    }
+                    composable(InvestRoutes.ROUTE_COMPARADOR) {
+                        AssetComparatorScreen(
+                            state = state,
+                            onQueryLiveQuote = viewModel::queryLiveAssetQuote
+                        )
+                    }
+                    composable(InvestRoutes.ROUTE_REBALANCEAMENTO) {
+                        RebalanceAdvisorScreen(
+                            state = state,
+                            onSaveTargets = viewModel::saveRebalanceTargets
+                        )
+                    }
+                    composable(InvestRoutes.ROUTE_IMPOSTO_DARF) {
+                        TaxDarfScreen(
+                            state = state,
+                            onSaveCarryLoss = viewModel::saveTaxCarryLoss
                         )
                     }
                 }

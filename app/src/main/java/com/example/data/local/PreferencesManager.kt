@@ -24,7 +24,15 @@ data class AppPreferencesState(
     val profitApplyToPositions: Boolean = true,
     val profitLastSyncEpochMs: Long = 0L,
     val profitLastStatusMessage: String = "",
-    val hideInfoBanners: Boolean = false
+    val hideInfoBanners: Boolean = false,
+    val targetPctAcoes: Double = 35.0,
+    val targetPctFii: Double = 25.0,
+    val targetPctFiagro: Double = 10.0,
+    val targetPctEtf: Double = 15.0,
+    val targetPctRendaFixa: Double = 10.0,
+    val targetPctCripto: Double = 5.0,
+    val carryLossCommonBrl: Double = 0.0,
+    val carryLossFiiBrl: Double = 0.0
 )
 
 class PreferencesManager(private val context: Context) {
@@ -41,6 +49,14 @@ class PreferencesManager(private val context: Context) {
         val PROFIT_LAST_SYNC_MS = longPreferencesKey("profit_last_sync_ms")
         val PROFIT_LAST_STATUS = stringPreferencesKey("profit_last_status")
         val HIDE_INFO_BANNERS = booleanPreferencesKey("hide_info_banners")
+        val TARGET_ACOES = doublePreferencesKey("target_pct_acoes")
+        val TARGET_FII = doublePreferencesKey("target_pct_fii")
+        val TARGET_FIAGRO = doublePreferencesKey("target_pct_fiagro")
+        val TARGET_ETF = doublePreferencesKey("target_pct_etf")
+        val TARGET_RF = doublePreferencesKey("target_pct_rf")
+        val TARGET_CRIPTO = doublePreferencesKey("target_pct_cripto")
+        val CARRY_LOSS_COMMON = doublePreferencesKey("carry_loss_common_brl")
+        val CARRY_LOSS_FII = doublePreferencesKey("carry_loss_fii_brl")
     }
 
     val preferencesFlow: Flow<AppPreferencesState> = context.investPrefsDataStore.data.map { prefs ->
@@ -56,7 +72,15 @@ class PreferencesManager(private val context: Context) {
             profitApplyToPositions = prefs[Keys.PROFIT_APPLY_POSITIONS] ?: true,
             profitLastSyncEpochMs = prefs[Keys.PROFIT_LAST_SYNC_MS] ?: 0L,
             profitLastStatusMessage = prefs[Keys.PROFIT_LAST_STATUS] ?: "",
-            hideInfoBanners = prefs[Keys.HIDE_INFO_BANNERS] ?: false
+            hideInfoBanners = prefs[Keys.HIDE_INFO_BANNERS] ?: false,
+            targetPctAcoes = prefs[Keys.TARGET_ACOES] ?: 35.0,
+            targetPctFii = prefs[Keys.TARGET_FII] ?: 25.0,
+            targetPctFiagro = prefs[Keys.TARGET_FIAGRO] ?: 10.0,
+            targetPctEtf = prefs[Keys.TARGET_ETF] ?: 15.0,
+            targetPctRendaFixa = prefs[Keys.TARGET_RF] ?: 10.0,
+            targetPctCripto = prefs[Keys.TARGET_CRIPTO] ?: 5.0,
+            carryLossCommonBrl = prefs[Keys.CARRY_LOSS_COMMON] ?: 0.0,
+            carryLossFiiBrl = prefs[Keys.CARRY_LOSS_FII] ?: 0.0
         )
     }
 
@@ -74,6 +98,31 @@ class PreferencesManager(private val context: Context) {
 
     suspend fun setHideInfoBanners(hide: Boolean) {
         context.investPrefsDataStore.edit { it[Keys.HIDE_INFO_BANNERS] = hide }
+    }
+
+    suspend fun saveRebalanceTargets(
+        acoes: Double,
+        fii: Double,
+        fiagro: Double,
+        etf: Double,
+        rendaFixa: Double,
+        cripto: Double
+    ) {
+        context.investPrefsDataStore.edit {
+            it[Keys.TARGET_ACOES] = acoes.coerceAtLeast(0.0)
+            it[Keys.TARGET_FII] = fii.coerceAtLeast(0.0)
+            it[Keys.TARGET_FIAGRO] = fiagro.coerceAtLeast(0.0)
+            it[Keys.TARGET_ETF] = etf.coerceAtLeast(0.0)
+            it[Keys.TARGET_RF] = rendaFixa.coerceAtLeast(0.0)
+            it[Keys.TARGET_CRIPTO] = cripto.coerceAtLeast(0.0)
+        }
+    }
+
+    suspend fun saveTaxCarryLoss(commonBrl: Double, fiiBrl: Double) {
+        context.investPrefsDataStore.edit {
+            it[Keys.CARRY_LOSS_COMMON] = commonBrl.coerceAtLeast(0.0)
+            it[Keys.CARRY_LOSS_FII] = fiiBrl.coerceAtLeast(0.0)
+        }
     }
 
     suspend fun setFutureIntegrationMeta(supabaseUrl: String, githubRepo: String) {

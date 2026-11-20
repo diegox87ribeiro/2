@@ -517,6 +517,166 @@ class InvestAiCoreTests {
         assertEquals(100.0, wege.series.normalizedPoints12m.first(), 0.001)
         assertEquals("Carteira Real", wege.groupLabel)
     }
+
+    @Test
+    fun `csv importer parses dividends in same asset table and standalone dividend history rows`() {
+        val csv = """
+            Ticker;Nome;Classe;Quantidade;Preço Médio;Preço Atual;Setor;Data-Com;Dividendo Valor;Data Provento;Tipo Provento
+            HGLG11;Pátria Logística;FII;20;155,00;156,40;Logística;30;22,00;14/11/2026;Rendimento
+            HGLG11;;;;;;;;22,00;14/10/2026;Rendimento
+            ITUB4;Itaú Unibanco;Ações BR;100;31,50;35,80;Bancos;3;28,40;01/11/2026;JCP
+            CAIXA;Reserva;Renda Fixa;1;1000,00;;;;;;
+        """.trimIndent()
+
+        val result = SpreadsheetImporter.parseCsv("carteira_e_proventos.csv", csv)
+        assertEquals(2, result.positions.size)
+        assertEquals(1000.0, result.cashBalanceBrl ?: 0.0, 0.01)
+        assertEquals(3, result.dividends.size)
+        assertTrue(result.dividends.all { it.operationType == OperationType.PROVENTO.name })
+        assertEquals(22.0, result.dividends.first { it.ticker == "HGLG11" && it.dateIso == "14/11/2026" }.totalValue, 0.01)
+        assertEquals(22.0, result.dividends.first { it.ticker == "HGLG11" && it.dateIso == "14/10/2026" }.totalValue, 0.01)
+        assertEquals(28.40, result.dividends.first { it.ticker == "ITUB4" }.totalValue, 0.01)
+
+        val templateParsed = SpreadsheetImporter.parseCsv("template.csv", SpreadsheetImporter.generateStandardCsvTemplate())
+        assertEquals(5, templateParsed.positions.size)
+        assertEquals(3, templateParsed.dividends.size)
+    }
+
+    @Test
+    fun `valuation calculator computes Bazin ceiling Graham fair price and 5 pillar scores`() {
+        val itub = MarketCatalogRepository.catalogAssets.first { it.ticker == "ITUB4" }
+        val valResult = com.example.domain.model.ValuationAndComparisonCalculator.computeValuation(itub, targetBazinDyPercent = 6.0)
+
+        val expectedBazin = (itub.price * (itub.dy12m / 100.0)) / 0.06
+        assertEquals(expectedBazin, valResult.bazinCeilingPriceBrl ?: 0.0, 0.05)
+        assertTrue((valResult.bazinMarginPercent ?: 0.0) > 0.0)
+        assertTrue((valResult.grahamFairPriceBrl ?: 0.0) > itub.price)
+        assertEquals(5, valResult.pillarScores.asList().size)
+        assertTrue(valResult.overallScore in 1.0..100.0)
+    }
+
+    @Test
+    fun `rebalance advisor allocates new contribution toward underweight classes and lowers HHI`() {
+        val heavyStock = PortfolioItemView(
+            id = 1L,
+            portfolioType = PortfolioType.REAL,
+            ticker = "ITUB4",
+            name = "Itaú PN",
+            assetClass = AssetClass.ACOES_BR,
+            quantity = 200.0,
+            averagePrice = 30.0,
+            currentPrice = 35.0,
+            sector = "Bancos",
+            dataComDay = 3,
+            dataSourceLabel = "CSV",
+            isDemo = false,
+            hasMarketPrice = true
+        )
+        val plan = com.example.domain.model.RebalanceAdvisorCalculator.calculatePlan(
+            realPositions = listOf(heavyStock),
+            marketAssets = MarketCatalogRepository.catalogAssets,
+            rawTargets = mapOf(
+                AssetClass.ACOES_BR to 40.0,
+                AssetClass.FII to 40.0,
+                AssetClass.RENDA_FIXA to 20.0
+            ),
+            contributionBrl = 3000.0,
+            respectHhiCap = true
+        )
+        assertEquals(10000.0, plan.hhiBefore, 0.5)
+        assertTrue(plan.hhiAfter < plan.hhiBefore)
+        assertTrue(plan.suggestions.any { it.assetClass == AssetClass.FII })
+        assertEquals(3000.0, plan.suggestions.sumOf { it.suggestedAmountBrl }, 5.0)
+    }
+
+    @Test
+    fun `tax report calculator enforces 20k stock exemption, 20pct FII tax, carry-forward losses, and DARF`() {
+        val ops = listOf(
+            // Compra ITUB4 1000x a 30 = 30.000
+            com.example.data.local.PortfolioOperationEntity(
+                id = 1L, portfolioType = PortfolioType.REAL.name, ticker = "ITUB4",
+                operationType = OperationType.COMPRA.name, quantity = 1000.0, unitPrice = 30.0,
+                totalValue = 30000.0, dateIso = "02/10/2026", notes = "Compra teste", createdAt = 100L
+            ),
+            // Venda ITUB4 500x a 36 = 18.000 (ISENTO <= 20k, lucro 3.000)
+            com.example.data.local.PortfolioOperationEntity(
+                id = 2L, portfolioType = PortfolioType.REAL.name, ticker = "ITUB4",
+                operationType = OperationType.VENDA.name, quantity = 500.0, unitPrice = 36.0,
+                totalValue = 18000.0, dateIso = "10/10/2026", notes = "Venda teste", createdAt = 200L
+            ),
+            // Compra HGLG11 100x a 150 = 15.000
+            com.example.data.local.PortfolioOperationEntity(
+                id = 3L, portfolioType = PortfolioType.REAL.name, ticker = "HGLG11",
+                operationType = OperationType.COMPRA.name, quantity = 100.0, unitPrice = 150.0,
+                totalValue = 15000.0, dateIso = "02/10/2026", notes = "Compra FII teste", createdAt = 300L
+            ),
+            // Venda HGLG11 50x a 160 = 8.000 (SEM ISENCAO em FII! Lucro 500 -> 20% = R$ 100)
+            com.example.data.local.PortfolioOperationEntity(
+                id = 4L, portfolioType = PortfolioType.REAL.name, ticker = "HGLG11",
+                operationType = OperationType.VENDA.name, quantity = 50.0, unitPrice = 160.0,
+                totalValue = 8000.0, dateIso = "15/10/2026", notes = "Venda FII teste", createdAt = 400L
+            )
+        )
+
+        val reports = com.example.domain.model.TaxReportCalculator.computeMonthlyReports(
+            operations = ops,
+            realPositions = emptyList(),
+            marketAssets = MarketCatalogRepository.catalogAssets,
+            initialCarryLossCommonBrl = 500.0,
+            initialCarryLossFiiBrl = 100.0
+        )
+
+        assertEquals(1, reports.size)
+        val oct = reports.first()
+        assertTrue(oct.isStockExempt20k)
+        assertEquals(0.0, oct.darfCommonBrl, 0.01)
+        // Lucro isento em acoes NAO consome prejuizo acumulado comum!
+        assertEquals(500.0, oct.endingCarryLossCommonBrl, 0.01)
+        // FII: 500 lucro - 100 prejuizo FII = 400 base * 20% = R$ 80,00 DARF
+        assertEquals(400.0, oct.taxableFiiBaseBrl, 0.01)
+        assertEquals(80.0, oct.darfFiiBrl, 0.01)
+        assertEquals(80.0, oct.totalDarfBrl, 0.01)
+        assertFalse(oct.isBelowDarfMinimum10Brl)
+    }
+
+    @Test
+    fun `fundamental ranking filter hides non-matching assets and reveals them when criteria relax`() {
+        val defaultCriteria = com.example.domain.model.FundamentalFilterCriteria(
+            minDyPercent = 6.0,
+            maxPvp = 1.25,
+            minDailyLiquidityMillions = 1.5,
+            maxInadimplenciaPercent = 3.0,
+            minRoePercent = 12.0
+        )
+
+        val defaultRanked = com.example.domain.model.ValuationAndComparisonCalculator.filterFundamentalRanking(
+            assets = MarketCatalogRepository.catalogAssets,
+            criteria = defaultCriteria
+        )
+        val defaultTickers = defaultRanked.map { it.asset.ticker }.toSet()
+
+        assertTrue("KNCR11" in defaultTickers)
+        assertTrue("HGLG11" in defaultTickers)
+        assertFalse("WEGE3" in defaultTickers) // DY 1.6% < 6%, P/VP 10.9 > 1.25
+        assertFalse("ITUB4" in defaultTickers) // P/VP 1.85 > 1.25
+        assertFalse("BBAS3" in defaultTickers) // Inadimplência 3.2% > 3.0%
+        assertFalse("SELIC29" in defaultTickers) // Renda Fixa excluída
+
+        val relaxedCriteria = defaultCriteria.copy(
+            maxPvp = 2.0,
+            maxInadimplenciaPercent = 3.5
+        )
+        val relaxedTickers = com.example.domain.model.ValuationAndComparisonCalculator.filterFundamentalRanking(
+            assets = MarketCatalogRepository.catalogAssets,
+            criteria = relaxedCriteria
+        ).map { it.asset.ticker }.toSet()
+
+        assertTrue("ITUB4" in relaxedTickers)
+        assertTrue("BBAS3" in relaxedTickers)
+        assertFalse("WEGE3" in relaxedTickers)
+    }
 }
+
+
 
 

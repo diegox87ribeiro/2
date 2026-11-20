@@ -7,12 +7,15 @@ import androidx.compose.material.icons.filled.Agriculture
 import androidx.compose.material.icons.filled.Apartment
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Balance
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CandlestickChart
+import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.CurrencyBitcoin
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.QueryStats
+import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.ShowChart
@@ -36,6 +39,9 @@ object InvestRoutes {
     const val ROUTE_OPORTUNIDADES_IA = "oportunidades_ia"
     const val ROUTE_RELATORIOS = "relatorios_gerenciais"
     const val ROUTE_PROFITCHART = "profitchart_sync"
+    const val ROUTE_COMPARADOR = "comparador_valuation"
+    const val ROUTE_REBALANCEAMENTO = "rebalanceamento_aporte"
+    const val ROUTE_IMPOSTO_DARF = "imposto_renda_darf"
     const val ROUTE_DATA_COM_GROUP = "data_com_grupo/{groupCode}"
     const val ROUTE_PORTFOLIO_CLASS = "carteira_classe/{assetClassName}"
 
@@ -81,7 +87,10 @@ val ALL_INVEST_MODULES: List<InvestModuleDest> = listOf(
     InvestModuleDest(InvestRoutes.ROUTE_SIMULADOR, 13, "Simulador de Carteira", "Simulador", Icons.Default.Science, ModuleSection.GESTAO),
     InvestModuleDest(InvestRoutes.ROUTE_OPORTUNIDADES_IA, 14, "Agentes IA & Sinais", "Agentes IA", Icons.Default.AutoAwesome, ModuleSection.GESTAO),
     InvestModuleDest(InvestRoutes.ROUTE_RELATORIOS, 15, "Relatórios Gerenciais", "Relatórios", Icons.Default.Assessment, ModuleSection.GESTAO),
-    InvestModuleDest(InvestRoutes.ROUTE_PROFITCHART, 16, "Conexão ProfitChart", "ProfitChart", Icons.Default.Sync, ModuleSection.GESTAO)
+    InvestModuleDest(InvestRoutes.ROUTE_PROFITCHART, 16, "Conexão ProfitChart", "ProfitChart", Icons.Default.Sync, ModuleSection.GESTAO),
+    InvestModuleDest(InvestRoutes.ROUTE_COMPARADOR, 17, "Comparador & Valuation", "Comparador", Icons.Default.CompareArrows, ModuleSection.INTELIGENCIA),
+    InvestModuleDest(InvestRoutes.ROUTE_REBALANCEAMENTO, 18, "Aporte & Rebalanceamento", "Aporte", Icons.Default.Balance, ModuleSection.GESTAO),
+    InvestModuleDest(InvestRoutes.ROUTE_IMPOSTO_DARF, 19, "IR Mensal & DARF", "IR / DARF", Icons.Default.Receipt, ModuleSection.GESTAO)
 )
 
 val PRIMARY_NAVIGATION_ROUTES: List<String> = listOf(

@@ -23,11 +23,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.domain.model.DataComGroup
+import com.example.domain.model.DividendMonitorCalculator
 import com.example.ui.components.DataDisclaimerBanner
 import com.example.ui.components.FilterChipBar
 import com.example.ui.components.FintechCard
 import com.example.ui.components.GroupBadge
 import com.example.ui.components.HorizontalBarDistribution
+import com.example.ui.components.MonthlyDividendBarChart
 import com.example.ui.components.formatBrl
 import com.example.ui.components.formatPct
 import com.example.ui.theme.ElectricCyan
@@ -62,6 +64,14 @@ fun DividendCalendarScreen(
         }
     }
 
+    val dividendSummary = remember(state.realPositions, state.marketAssets, state.operations) {
+        DividendMonitorCalculator.compute(
+            realPositions = state.realPositions,
+            marketAssets = state.marketAssets,
+            operations = state.operations
+        )
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -71,6 +81,16 @@ fun DividendCalendarScreen(
             DataDisclaimerBanner(
                 text = "Calendário estratégico por grupos de Data-Com (G1: dias 1–8 • G2: 9–16 • G3: 17–24 • G4: 25–31). Datas demonstrativas sujeitas a confirmação no RI/B3."
             )
+        }
+
+        if (dividendSummary.monthlyJanToDec.isNotEmpty() && state.realPositions.isNotEmpty()) {
+            item {
+                FintechCard {
+                    Text("Proventos Recebidos vs Projetados (Jan–Dez)", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+                    MonthlyDividendBarChart(points = dividendSummary.monthlyJanToDec)
+                }
+            }
         }
 
         item {

@@ -43,9 +43,14 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.domain.model.AllocationSlice
 import com.example.domain.model.BenchmarkSeries
+import com.example.domain.model.MonthlyDividendPoint
 import com.example.ui.theme.AmberGold
 import com.example.ui.theme.ChartColors
 import com.example.ui.theme.CoralRed
@@ -54,8 +59,11 @@ import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.MonoValueStyle
 import com.example.ui.theme.SubtleBorder
 import com.example.ui.theme.TextSecondary
+import kotlin.math.PI
 import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.min
+import kotlin.math.sin
 
 @Composable
 fun InteractiveDonutChart(
@@ -535,5 +543,184 @@ fun TechnicalPriceChart(
             color = EmeraldPrimary,
             style = Stroke(width = 4.5f, cap = StrokeCap.Round)
         )
+    }
+}
+
+@Composable
+fun MonthlyDividendBarChart(
+    points: List<MonthlyDividendPoint>,
+    modifier: Modifier = Modifier
+) {
+    if (points.isEmpty()) return
+    var selectedIdx by remember(points) { mutableIntStateOf(points.lastIndex.coerceAtLeast(0)) }
+    val safeIdx = selectedIdx.coerceIn(0, points.lastIndex)
+    val selected = points[safeIdx]
+    val maxVal = (points.maxOfOrNull { maxOf(it.receivedBrl, it.projectedBrl) } ?: 1.0).coerceAtLeast(1.0)
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "${selected.monthLabel}: Recebido ${formatBrl(selected.receivedBrl)}",
+                style = MaterialTheme.typography.labelMedium,
+                color = EmeraldPrimary
+            )
+            Text(
+                "Projetado ${formatBrl(selected.projectedBrl)}",
+                style = MonoValueStyle.copy(fontSize = MaterialTheme.typography.labelMedium.fontSize),
+                color = ElectricCyan
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(148.dp)
+                .pointerInput(points) {
+                    detectTapGestures { offset ->
+                        val colWidth = size.width / points.size.toFloat().coerceAtLeast(1f)
+                        val idx = (offset.x / colWidth).toInt().coerceIn(0, points.lastIndex)
+                        selectedIdx = idx
+                    }
+                }
+        ) {
+            val w = size.width
+            val h = size.height
+            val colW = w / points.size.toFloat()
+            val barW = (colW * 0.34f).coerceAtLeast(4f)
+
+            drawLine(
+                color = SubtleBorder,
+                start = Offset(0f, h - 2f),
+                end = Offset(w, h - 2f),
+                strokeWidth = 1.5f
+            )
+
+            points.forEachIndexed { idx, pt ->
+                val centerX = (idx + 0.5f) * colW
+                if (idx == safeIdx) {
+                    drawRect(
+                        color = EmeraldPrimary.copy(alpha = 0.08f),
+                        topLeft = Offset(idx * colW, 0f),
+                        size = Size(colW, h)
+                    )
+                }
+                val projH = ((pt.projectedBrl / maxVal) * (h - 14f)).toFloat().coerceAtLeast(if (pt.projectedBrl > 0) 4f else 0f)
+                val recH = ((pt.receivedBrl / maxVal) * (h - 14f)).toFloat().coerceAtLeast(if (pt.receivedBrl > 0) 4f else 0f)
+
+                if (projH > 0f) {
+                    drawRect(
+                        color = ElectricCyan.copy(alpha = if (idx == safeIdx) 0.95f else 0.55f),
+                        topLeft = Offset(centerX - barW - 1.5f, h - 2f - projH),
+                        size = Size(barW, projH)
+                    )
+                }
+                if (recH > 0f) {
+                    drawRect(
+                        color = EmeraldPrimary.copy(alpha = if (idx == safeIdx) 1.0f else 0.72f),
+                        topLeft = Offset(centerX + 1.5f, h - 2f - recH),
+                        size = Size(barW, recH)
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            points.forEachIndexed { idx, pt ->
+                Text(
+                    text = pt.monthLabel.take(1),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (idx == safeIdx) EmeraldPrimary else TextSecondary,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable { selectedIdx = idx }
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Verde = Recebido no ano • Ciano = Projetado • Toque em um mês para inspecionar",
+            style = MaterialTheme.typography.labelSmall,
+            color = TextSecondary
+        )
+    }
+}
+
+@Composable
+fun PillarRadarChart(
+    series: List<Triple<String, Color, List<Double>>>,
+    axisLabels: List<String>,
+    modifier: Modifier = Modifier
+) {
+    if (axisLabels.size < 3 || series.isEmpty()) return
+    val textMeasurer = rememberTextMeasurer()
+
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(250.dp)
+    ) {
+        val count = axisLabels.size
+        val cx = size.width / 2f
+        val cy = size.height / 2f
+        val radius = (min(size.width, size.height) * 0.34f).coerceAtLeast(40f)
+
+        fun pointAt(axisIdx: Int, ratio: Float): Offset {
+            val angle = (-PI / 2.0) + (2.0 * PI * axisIdx / count.toDouble())
+            return Offset(
+                x = cx + (radius * ratio * cos(angle)).toFloat(),
+                y = cy + (radius * ratio * sin(angle)).toFloat()
+            )
+        }
+
+        // Anéis de grade (33%, 66%, 100%)
+        listOf(0.33f, 0.66f, 1.0f).forEach { ringRatio ->
+            val ringPath = Path()
+            for (i in 0 until count) {
+                val p = pointAt(i, ringRatio)
+                if (i == 0) ringPath.moveTo(p.x, p.y) else ringPath.lineTo(p.x, p.y)
+            }
+            ringPath.close()
+            drawPath(ringPath, color = SubtleBorder, style = Stroke(width = 1.5f))
+        }
+
+        // Eixos radiais e rótulos dos 5 pilares
+        for (i in 0 until count) {
+            val outer = pointAt(i, 1.0f)
+            drawLine(color = SubtleBorder, start = Offset(cx, cy), end = outer, strokeWidth = 1.5f)
+
+            val labelPt = pointAt(i, 1.24f)
+            val measured = textMeasurer.measure(
+                text = axisLabels[i],
+                style = TextStyle(color = TextSecondary, fontSize = 11.sp)
+            )
+            drawText(
+                textLayoutResult = measured,
+                topLeft = Offset(
+                    x = (labelPt.x - measured.size.width / 2f).coerceIn(4f, size.width - measured.size.width - 4f),
+                    y = (labelPt.y - measured.size.height / 2f).coerceIn(4f, size.height - measured.size.height - 4f)
+                )
+            )
+        }
+
+        // Polígonos por ativo comparado
+        series.forEach { (_, color, scores) ->
+            val poly = Path()
+            for (i in 0 until count) {
+                val ratio = ((scores.getOrNull(i) ?: 50.0) / 100.0).toFloat().coerceIn(0.05f, 1.0f)
+                val p = pointAt(i, ratio)
+                if (i == 0) poly.moveTo(p.x, p.y) else poly.lineTo(p.x, p.y)
+            }
+            poly.close()
+            drawPath(poly, color = color.copy(alpha = 0.22f))
+            drawPath(poly, color = color, style = Stroke(width = 3.5f))
+        }
     }
 }

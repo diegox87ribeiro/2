@@ -457,13 +457,16 @@ fun AssetDetailSheetContent(
         }
 
         FintechCard {
+            val valuation = com.example.domain.model.ValuationAndComparisonCalculator.computeValuation(asset)
             val metrics = listOf(
                 "DY (12m)" to formatPct(asset.dy12m, false),
                 "P/VP" to String.format(ptBrLocale, "%.2fx", asset.pvp),
                 "P/L" to String.format(ptBrLocale, "%.2fx", asset.pl),
                 "Liquidez Diária" to "R$ ${String.format(ptBrLocale, "%.1f", asset.liquidezDiariaMilhoes)}M",
                 "IFR (14)" to String.format(ptBrLocale, "%.1f", asset.rsi14),
-                "Data-Com" to (asset.dataComDay?.let { "Dia $it (${asset.dataComGroup?.code})" } ?: "N/A")
+                "Data-Com" to (asset.dataComDay?.let { "Dia $it (${asset.dataComGroup?.code})" } ?: "N/A"),
+                "Teto Bazin (6%)" to (valuation.bazinCeilingPriceBrl?.let { formatBrl(it) } ?: "N/A"),
+                valuation.fairPriceMethodLabel to (valuation.grahamFairPriceBrl?.let { formatBrl(it) } ?: "N/A")
             )
             metrics.chunked(2).forEach { pair ->
                 Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
@@ -474,6 +477,14 @@ fun AssetDetailSheetContent(
                         }
                     }
                 }
+            }
+            if (valuation.bazinMarginPercent != null) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Margem Bazin: ${valuation.bazinStatusLabel}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (valuation.bazinMarginPercent >= 0.0) EmeraldPrimary else AmberGold
+                )
             }
         }
 

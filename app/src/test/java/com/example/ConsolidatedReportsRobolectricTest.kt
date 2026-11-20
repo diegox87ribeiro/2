@@ -8,6 +8,10 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import com.example.ui.navigation.InvestAppRoot
 import com.example.ui.theme.InvestAiTheme
 import org.junit.Rule
@@ -289,5 +293,183 @@ class ConsolidatedReportsRobolectricTest {
         composeRule.onNodeWithTag("dividend_received_monthly").assertExists()
         composeRule.onNodeWithTag("dividend_projected_annual").assertExists()
         composeRule.onNodeWithTag("dividend_monitor_record_button").assertExists()
+        composeRule.onNodeWithTag("dividend_tab_jan_dez").performClick()
+        composeRule.onNodeWithTag("dividend_jan_dec_chart").assertExists()
+    }
+
+    @Test
+    fun `navigating to Comparador, Rebalanceamento, and IR DARF renders all 3 new modules`() {
+        composeRule.setContent {
+            InvestAiTheme {
+                InvestAppRoot(userDisplayName = "Investidor Teste")
+            }
+        }
+
+        // 17. Comparador & Valuation
+        composeRule.onNodeWithTag("open_drawer_button").performClick()
+        composeRule.onNodeWithTag("drawer_item_comparador_valuation").performScrollTo().performClick()
+        composeRule.onNodeWithTag("comparator_lazy_column")
+            .performScrollToNode(hasTestTag("comparator_radar_card"))
+        composeRule.onNodeWithTag("comparator_radar_card").assertIsDisplayed()
+        composeRule.onNodeWithTag("comparator_lazy_column")
+            .performScrollToNode(hasTestTag("comparator_table_card"))
+        composeRule.onNodeWithTag("comparator_table_card").assertIsDisplayed()
+
+        // 18. Aporte & Rebalanceamento
+        composeRule.onNodeWithTag("open_drawer_button").performClick()
+        composeRule.onNodeWithTag("drawer_item_rebalanceamento_aporte").performScrollTo().performClick()
+        composeRule.onNodeWithTag("rebalance_lazy_column")
+            .performScrollToNode(hasTestTag("rebalance_contribution_input"))
+        composeRule.onNodeWithTag("rebalance_contribution_input").assertIsDisplayed()
+        composeRule.onNodeWithTag("rebalance_lazy_column")
+            .performScrollToNode(hasTestTag("rebalance_impact_card"))
+        composeRule.onNodeWithTag("rebalance_impact_card").assertIsDisplayed()
+
+        // 19. IR Mensal & DARF
+        composeRule.onNodeWithTag("open_drawer_button").performClick()
+        composeRule.onNodeWithTag("drawer_item_imposto_renda_darf").performScrollTo().performClick()
+        composeRule.onNodeWithTag("tax_darf_lazy_column")
+            .performScrollToNode(hasTestTag("tax_carry_common_input"))
+        composeRule.onNodeWithTag("tax_carry_common_input").assertIsDisplayed()
+        composeRule.onNodeWithTag("tax_darf_lazy_column")
+            .performScrollToNode(hasTestTag("save_tax_carry_button"))
+        composeRule.onNodeWithTag("save_tax_carry_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("tax_darf_lazy_column")
+            .performScrollToNode(hasTestTag("tax_empty_card"))
+        composeRule.onNodeWithTag("tax_empty_card").assertIsDisplayed()
+    }
+
+    @Test
+    fun `import preview dialog displays detected dividends alongside asset positions`() {
+        val parsed = com.example.data.importexport.SpreadsheetImporter.parseCsv(
+            "modelo.csv",
+            com.example.data.importexport.SpreadsheetImporter.generateStandardCsvTemplate()
+        )
+        composeRule.setContent {
+            InvestAiTheme {
+                com.example.ui.screens.ImportPreviewDialog(
+                    preview = parsed,
+                    onDismiss = {},
+                    onConfirm = {}
+                )
+            }
+        }
+        composeRule.onNodeWithTag("preview_counts_label").assertIsDisplayed()
+        composeRule.onNodeWithText("5 ativos • 3 provento(s)").assertIsDisplayed()
+    }
+
+    @Test
+    fun `fundamental analysis ranking shows only matching assets and displays empty state when none match`() {
+        val strictNoMatchState = com.example.ui.viewmodel.InvestDashboardState(
+            strategyCriteria = com.example.data.local.StrategyCriteriaEntity(
+                minDyPercent = 15.5,
+                maxPvp = 0.70,
+                minDailyLiquidityMillions = 20.0,
+                maxInadimplenciaPercent = 0.0,
+                minRoePercent = 25.0
+            )
+        )
+
+        composeRule.setContent {
+            InvestAiTheme {
+                com.example.ui.screens.FundamentalAnalysisScreen(
+                    state = strictNoMatchState,
+                    onUpdateCriteria = { _, _ -> }
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("fundamental_lazy_column")
+            .performScrollToNode(hasTestTag("fundamental_ranking_header"))
+        composeRule.onNodeWithText("Ranking Fundamentalista (0/15)").assertIsDisplayed()
+        composeRule.onNodeWithTag("fundamental_lazy_column")
+            .performScrollToNode(hasTestTag("fundamental_ranking_empty_card"))
+        composeRule.onNodeWithTag("fundamental_ranking_empty_card").assertIsDisplayed()
+        composeRule.onNodeWithTag("fundamental_asset_card_WEGE3").assertDoesNotExist()
+        composeRule.onNodeWithTag("fundamental_asset_card_ITUB4").assertDoesNotExist()
+
+        composeRule.onNodeWithTag("reset_fundamental_filters_button").performClick()
+
+        composeRule.onNodeWithTag("fundamental_ranking_empty_card").assertDoesNotExist()
+        composeRule.onNodeWithTag("fundamental_lazy_column")
+            .performScrollToNode(hasTestTag("fundamental_asset_card_KNCR11"))
+        composeRule.onNodeWithTag("fundamental_asset_card_KNCR11").assertIsDisplayed()
+        composeRule.onNodeWithTag("fundamental_asset_card_WEGE3").assertDoesNotExist()
+        composeRule.onNodeWithTag("fundamental_asset_card_ITUB4").assertDoesNotExist()
+    }
+
+    @Test
+    fun `typing ticker in Dashboard comparison chart and AssetComparator adds asset and triggers live lookup when needed`() {
+        var queriedTickers by mutableStateOf(emptyList<String>())
+        var extraAssets by mutableStateOf(emptyList<com.example.domain.model.MarketAsset>())
+
+        composeRule.setContent {
+            InvestAiTheme {
+                val baseCatalog = com.example.data.repository.MarketCatalogRepository.catalogAssets
+                val state = com.example.ui.viewmodel.InvestDashboardState(
+                    marketAssets = extraAssets + baseCatalog
+                )
+                com.example.ui.screens.DashboardScreen(
+                    state = state,
+                    onNavigate = {},
+                    onLoadDemoPortfolio = {},
+                    onQueryLiveQuote = { ticker ->
+                        queriedTickers = queriedTickers + ticker
+                        if (ticker.equals("PETR4", ignoreCase = true)) {
+                            val liveQuote = com.example.domain.model.LiveMarketQuote(
+                                ticker = "PETR4",
+                                companyName = "Petrobras PN",
+                                price = 38.50,
+                                changePercent1d = 1.4,
+                                priceSeries30d = listOf(35.0, 35.8, 36.4, 37.1, 37.9, 38.5),
+                                primarySourceLabel = "B3 Oficial",
+                                consultedSources = listOf("B3 Oficial"),
+                                fetchedAtMillis = 1_763_578_800_000L,
+                                marketTimestampLabel = "20/11 12:00",
+                                b3PageUrl = "https://www.b3.com.br/",
+                                advfnPageUrl = "https://br.advfn.com/"
+                            )
+                            extraAssets = listOf(
+                                com.example.data.repository.LiveMarketDataRepository.mergeLiveQuoteIntoMarketAsset(null, liveQuote)
+                            )
+                        }
+                    }
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("dashboard_lazy_column")
+            .performScrollToNode(hasTestTag("dashboard_compare_ticker_input"))
+        composeRule.onNodeWithTag("dashboard_compare_ticker_input").performTextInput("WEGE3")
+        composeRule.onNodeWithTag("dashboard_compare_ticker_button").performClick()
+
+        composeRule.onNodeWithTag("compare_picker_chip_WEGE3").assertIsDisplayed()
+
+        composeRule.onNodeWithTag("dashboard_compare_ticker_input").performTextInput("PETR4")
+        composeRule.onNodeWithTag("dashboard_compare_ticker_button").performClick()
+
+        org.junit.Assert.assertTrue("PETR4" in queriedTickers)
+        composeRule.onNodeWithTag("compare_picker_chip_PETR4").assertIsDisplayed()
+    }
+
+    @Test
+    fun `typing ticker in AssetComparatorScreen selects it for Radar comparison`() {
+        composeRule.setContent {
+            InvestAiTheme {
+                com.example.ui.screens.AssetComparatorScreen(
+                    state = com.example.ui.viewmodel.InvestDashboardState()
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("comparator_ticker_input").performTextInput("WEGE3")
+        composeRule.onNodeWithTag("comparator_add_ticker_button").performClick()
+
+        composeRule.onNodeWithTag("comparator_lookup_feedback").assertIsDisplayed()
+        composeRule.onNodeWithTag("comparator_lazy_column")
+            .performScrollToNode(hasTestTag("comparator_table_header_WEGE3"))
+        composeRule.onNodeWithTag("comparator_table_header_WEGE3").assertIsDisplayed()
     }
 }
+
+

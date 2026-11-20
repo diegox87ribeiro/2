@@ -232,12 +232,12 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                 val result = withContext(Dispatchers.IO) {
                     repository.parseSpreadsheetPreview(uri)
                 }
-                if (result.positions.isNotEmpty()) {
+                if (result.positions.isNotEmpty() || result.dividends.isNotEmpty()) {
                     _pendingImportPreview.value = result
                 } else {
                     _importFeedback.value = result
                     _statusBannerMessage.value = result.warnings.firstOrNull()
-                        ?: "Nenhum ativo válido encontrado na planilha."
+                        ?: "Nenhum ativo ou dividendo válido encontrado na planilha."
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -256,8 +256,9 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 _pendingImportPreview.value = null
                 _importFeedback.value = pending
+                val divSuffix = if (pending.dividends.isNotEmpty()) " e ${pending.dividends.size} provento(s)" else ""
                 _statusBannerMessage.value =
-                    "Importação '${pending.fileName}' (${pending.positions.size} ativos) definida como referência da Carteira Real."
+                    "Importação '${pending.fileName}' (${pending.positions.size} ativos$divSuffix) salva na Carteira Real."
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -276,7 +277,15 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         val st = dashboardState.value
         val positions = if (type == PortfolioType.REAL) st.realPositions else st.simPositions
         val cash = if (type == PortfolioType.REAL) st.preferences.cashRealBrl else st.preferences.cashSimBrl
-        return SpreadsheetImporter.exportPositionsToCsv(positions, cash)
+        val latestDividends = st.operations
+            .filter { it.portfolioType == type.name && it.operationType == OperationType.PROVENTO.name && it.totalValue > 0.0 }
+            .groupBy { it.ticker.trim().uppercase() }
+            .mapValues { (_, ops) ->
+                val latest = ops.maxByOrNull { it.createdAt } ?: ops.first()
+                val event = latest.notes.substringBefore(" •").ifBlank { "Provento" }
+                Triple(latest.totalValue, latest.dateIso, event)
+            }
+        return SpreadsheetImporter.exportPositionsToCsv(positions, cash, latestDividends)
     }
 
     fun notifyMessage(message: String) {
@@ -419,6 +428,27 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setHideInfoBanners(hide: Boolean) {
         viewModelScope.launch { prefsManager.setHideInfoBanners(hide) }
+    }
+
+    fun saveRebalanceTargets(
+        acoes: Double,
+        fii: Double,
+        fiagro: Double,
+        etf: Double,
+        rendaFixa: Double,
+        cripto: Double
+    ) {
+        viewModelScope.launch {
+            prefsManager.saveRebalanceTargets(acoes, fii, fiagro, etf, rendaFixa, cripto)
+            _statusBannerMessage.value = "Metas de alocação por classe salvas."
+        }
+    }
+
+    fun saveTaxCarryLoss(commonBrl: Double, fiiBrl: Double) {
+        viewModelScope.launch {
+            prefsManager.saveTaxCarryLoss(commonBrl, fiiBrl)
+            _statusBannerMessage.value = "Prejuízos acumulados atualizados na apuração de IR."
+        }
     }
 
     fun setFutureIntegrations(supabaseUrl: String, githubRepo: String) {
