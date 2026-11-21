@@ -1,5 +1,6 @@
 package com.example
 
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -620,6 +621,84 @@ class ConsolidatedReportsRobolectricTest {
                 db.close()
             }
         }
+
+    @Test
+    fun `position edit sheet aligns Data-Com group G4 with user input, warns on market divergence and hides invalid PVP`() {
+        val smrePosition = com.example.domain.model.PortfolioItemView(
+            id = 99L,
+            portfolioType = com.example.domain.model.PortfolioType.REAL,
+            ticker = "SMRE11",
+            name = "SMRE11",
+            assetClass = com.example.domain.model.AssetClass.FII,
+            quantity = 5.0,
+            averagePrice = 55.17,
+            currentPrice = 56.30,
+            sector = "Fundos Imobiliários",
+            dataComDay = 30,
+            dataSourceLabel = "Importação XLSX (editado)",
+            isDemo = false,
+            hasMarketPrice = true
+        )
+        val divergentMarketAsset = com.example.data.repository.MarketCatalogRepository.catalogAssets.first().copy(
+            ticker = "SMRE11",
+            name = "Smart Real Estate FII",
+            assetClass = com.example.domain.model.AssetClass.FII,
+            sector = "Consulta em Tempo Real",
+            price = 56.30,
+            dy12m = 1.78,
+            pvp = 59360.38,
+            dataComDay = 2
+        )
+
+        composeRule.setContent {
+            InvestAiTheme {
+                androidx.compose.foundation.layout.Box(
+                    modifier = androidx.compose.ui.Modifier.fillMaxSize()
+                ) {
+                    com.example.ui.screens.AssetPositionDetailAndEditSheet(
+                        position = smrePosition,
+                        catalogAsset = divergentMarketAsset,
+                        portfolioTotalInvestedBrl = 30_000.0,
+                        onDismiss = {},
+                        onSave = { _, _, _, _, _, _, _, _, _, _ -> },
+                        onDelete = {}
+                    )
+                }
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Grupo G4").assertExists()
+        composeRule.onNodeWithTag("sheet_market_datacom_value").assertExists()
+        composeRule.onNodeWithText("Dia 30 (Grupo G4)").assertExists()
+        composeRule.onNodeWithTag("sheet_market_pvp_value").assertExists()
+        composeRule.onNodeWithText("N/D").assertExists()
+        composeRule.onNodeWithTag("datacom_divergence_banner").assertExists()
+        composeRule.onNodeWithTag("edit_pos_group_helper").assertExists()
+
+        composeRule.onNodeWithTag("sync_market_datacom_button").performClick()
+        composeRule.onNodeWithText("Grupo G1").assertExists()
+        composeRule.onNodeWithText("Dia 2 (Grupo G1)").assertExists()
+        composeRule.onNodeWithTag("datacom_divergence_banner").assertDoesNotExist()
+    }
+
+    @Test
+    fun `ai agents screen renders Google Search Grounding toggle, audio transcription and voice conversation controls`() {
+        composeRule.setContent {
+            InvestAiTheme {
+                com.example.ui.screens.AiAgentsScreen(
+                    state = com.example.ui.viewmodel.InvestDashboardState(),
+                    onSetConsent = {}
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("ai_agents_lazy_column")
+            .performScrollToNode(hasTestTag("ai_google_search_switch"))
+        composeRule.onNodeWithTag("ai_google_search_switch").assertExists()
+        composeRule.onNodeWithTag("ai_transcribe_audio_button").assertExists()
+        composeRule.onNodeWithTag("ai_voice_conversation_button").assertExists()
+    }
 }
 
 

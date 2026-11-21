@@ -203,28 +203,22 @@ object LiveQuoteParsers {
                 cal.get(Calendar.YEAR) * 100 + cal.get(Calendar.MONTH)
             }.distinct().size.coerceIn(0, 12).takeIf { sortedDivsDesc.isNotEmpty() }
 
+            val inferredClass = inferAssetClassFromTicker(ticker)
             val cutoffSec = (sortedDivsDesc.firstOrNull()?.first ?: 0L) - (365L * 86400L)
-            val divSum12m = sortedDivsDesc
-                .filter { it.first >= cutoffSec }
-                .sumOf { it.second }
-            val computedDy12m = if (divSum12m > 0.0 && effectivePrice > 0.0) {
-                (divSum12m / effectivePrice) * 100.0
+            val recent12mDivs = sortedDivsDesc.filter { it.first >= cutoffSec }
+            val divSum12m = recent12mDivs.sumOf { it.second }
+            val isMonthlyIncomeClass = inferredClass == AssetClass.FII || inferredClass == AssetClass.FIAGRO
+            val hasEnoughEventsForDy = if (isMonthlyIncomeClass) recent12mDivs.size >= 2 else recent12mDivs.isNotEmpty()
+            val computedDy12m = if (hasEnoughEventsForDy && divSum12m > 0.0 && effectivePrice > 0.0) {
+                ((divSum12m / effectivePrice) * 100.0).takeIf { it in 0.01..80.0 }
             } else {
                 null
             }
 
-            val inferredDataComDay = sortedDivsDesc.firstOrNull()?.first?.let { exSec ->
-                val cal = Calendar.getInstance(spTz).apply {
-                    timeInMillis = exSec * 1000L
-                    add(Calendar.DAY_OF_MONTH, -1)
-                    when (get(Calendar.DAY_OF_WEEK)) {
-                        Calendar.SUNDAY -> add(Calendar.DAY_OF_MONTH, -2)
-                        Calendar.SATURDAY -> add(Calendar.DAY_OF_MONTH, -1)
-                    }
-                }
-                cal.get(Calendar.DAY_OF_MONTH)
-            }
-
+            // Yahoo Finance para tickers .SA frequentemente reporta a data ex-dividendo deslocada
+            // para o início do mês seguinte (ex.: dia 1-3 = G1 em FIIs de final de mês G4).
+            // Por isso, deixamos dataComDay = null aqui para priorizar a tabela "Data com" oficial
+            // (Investidor10) ou o dia cadastrado pelo próprio usuário.
             PartialQuoteResult(
                 sourceName = MarketQuoteProvider.YAHOO_B3.displayName,
                 ticker = ticker,
@@ -245,7 +239,7 @@ object LiveQuoteParsers {
                 lastDividendBrl = latestDivAmount,
                 dividendHistory6m = history6m,
                 dividendConsistencyMonths = distinctMonths,
-                dataComDay = inferredDataComDay,
+                dataComDay = null,
                 marketTimestampLabel = formattedTime
             )
         }.getOrNull()
@@ -331,38 +325,44 @@ object LiveQuoteParsers {
         return runCatching {
             val cleanHtml = htmlText.replace(Regex("\\s+"), " ")
 
-            val price = Regex(
-                """Cota[cç][aã]o.*?value[^>]*>\s*R\$\s*([0-9.,]+)""",
-                setOf(RegexOption.IGNORE_CASE)
-            ).find(cleanHtml)?.groupValues?.getOrNull(1)?.let(::parseFlexibleDecimal)
-                ?.takeIf { it > 0.0 }
+            // Extrai valores apenas dentro do mesmo card (_card) em janela curta (<= 260 chars),
+            // evitando vazamento de texto entre cards (ex.: P/VP capturando patrimônio/volume).
+            val price = extractInvestidor10CardDecimal(
+                cleanHtml = cleanHtml,
+                titlePattern = """Cota[cç][aã]o""",
+                valuePattern = """R\$\s*([0-9.,]+)"""
+            )?.takeIf { it in 0.01..50_000.0 }
 
-            val dy12m = Regex(
-                """DY\s*\(12M\).*?value[^>]*>\s*([0-9.,]+)\s*%""",
-                setOf(RegexOption.IGNORE_CASE)
-            ).find(cleanHtml)?.groupValues?.getOrNull(1)?.let(::parseFlexibleDecimal)
-                ?.takeIf { it in 0.01..150.0 }
+            val dy12m = extractInvestidor10CardDecimal(
+                cleanHtml = cleanHtml,
+                titlePattern = """DY\s*\(12M\)""",
+                valuePattern = """([0-9.,]+)\s*%"""
+            )?.takeIf { it in 0.01..80.0 }
 
-            val pvp = Regex(
-                """P/VP.*?value[^>]*>\s*([0-9.,]+)""",
-                setOf(RegexOption.IGNORE_CASE)
-            ).find(cleanHtml)?.groupValues?.getOrNull(1)?.let(::parseFlexibleDecimal)
-                ?.takeIf { it > 0.0 }
+            val pvp = extractInvestidor10CardDecimal(
+                cleanHtml = cleanHtml,
+                titlePattern = """P/VP""",
+                valuePattern = """([0-9]+(?:[.,][0-9]+)?)"""
+            )?.takeIf { it in 0.05..30.0 }
 
-            val pl = Regex(
-                """P/L.*?value[^>]*>\s*([0-9.,]+)""",
-                setOf(RegexOption.IGNORE_CASE)
-            ).find(cleanHtml)?.groupValues?.getOrNull(1)?.let(::parseFlexibleDecimal)
-                ?.takeIf { it > 0.0 }
+            val pl = extractInvestidor10CardDecimal(
+                cleanHtml = cleanHtml,
+                titlePattern = """P/L""",
+                valuePattern = """([0-9]+(?:[.,][0-9]+)?)"""
+            )?.takeIf { it in 0.1..500.0 }
 
-            val roe = Regex(
-                """ROE.*?value[^>]*>\s*([0-9.,]+)\s*%""",
-                setOf(RegexOption.IGNORE_CASE)
-            ).find(cleanHtml)?.groupValues?.getOrNull(1)?.let(::parseFlexibleDecimal)
+            val roe = extractInvestidor10CardDecimal(
+                cleanHtml = cleanHtml,
+                titlePattern = """ROE""",
+                valuePattern = """([+-]?[0-9.,]+)\s*%"""
+            )?.takeIf { it in -200.0..200.0 }
 
-            // Tabela de Proventos: Tipo | Data com | Pagamento | Valor
+            // Tabela de Proventos: Tipo | Data com | Pagamento | Valor (tolera tags inline dentro do <td>)
             val divRowRegex = Regex(
-                """(?:Dividendos|Rendimentos|JCP|Amortiza[cç][aã]o)\s*</t[dh]>\s*<t[dh][^>]*>\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4})\s*</t[dh]>\s*<t[dh][^>]*>\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4})\s*</t[dh]>\s*<t[dh][^>]*>\s*R\$\s*([0-9.,]+)""",
+                """(?:Dividendos|Rendimentos|JCP|Amortiza[cç][aã]o)\s*(?:<[^>]+>\s*)*</t[dh]>\s*""" +
+                    """<t[dh][^>]*>(?:\s*<[^>]+>)*\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4})\s*(?:<[^>]+>\s*)*</t[dh]>\s*""" +
+                    """<t[dh][^>]*>(?:\s*<[^>]+>)*\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4})\s*(?:<[^>]+>\s*)*</t[dh]>\s*""" +
+                    """<t[dh][^>]*>(?:\s*<[^>]+>)*\s*R\$\s*([0-9.,]+)""",
                 RegexOption.IGNORE_CASE
             )
             val divMatches = divRowRegex.findAll(cleanHtml).toList()
@@ -392,6 +392,23 @@ object LiveQuoteParsers {
                 paymentDay = paymentDay
             )
         }.getOrNull()
+    }
+
+    private fun extractInvestidor10CardDecimal(
+        cleanHtml: String,
+        titlePattern: String,
+        valuePattern: String
+    ): Double? {
+        // Exige título dentro de um marcador de cabeçalho/card e busca o valor no máximo em 260 caracteres
+        // sem atravessar outro bloco "_card" ou "</table>".
+        val boundedRegex = Regex(
+            """>\s*$titlePattern\s*<(?:(?!_card["'\s>]|<table).){0,260}?class=["'][^"']*value[^"']*["'][^>]*>\s*$valuePattern""",
+            RegexOption.IGNORE_CASE
+        )
+        return boundedRegex.find(cleanHtml)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.let(::parseFlexibleDecimal)
     }
 
     fun calculateRsi14(closes: List<Double>): Double? {
@@ -656,16 +673,21 @@ class LiveMarketDataRepository(
                 timeZone = TimeZone.getTimeZone("America/Sao_Paulo")
             }.format(Date(quote.fetchedAtMillis))
 
+            val safePl = quote.priceToEarnings?.takeIf { it in 0.1..500.0 }
+            val safePvp = quote.priceToBook?.takeIf { it in 0.05..30.0 }
+            val safeDy = quote.dividendYield12m?.takeIf { it in 0.01..80.0 }
+            val safeRoe = quote.roePercent?.takeIf { it in -200.0..200.0 }
+
             if (existing != null) {
                 val series = quote.priceSeries30d.takeIf { it.size >= 5 } ?: existing.priceSeries30d
                 return existing.copy(
                     name = quote.companyName.takeIf { it.isNotBlank() && it != existing.ticker } ?: existing.name,
                     price = quote.price,
                     changePercent1d = quote.changePercent1d,
-                    pl = quote.priceToEarnings ?: existing.pl,
-                    pvp = quote.priceToBook ?: existing.pvp,
-                    dy12m = quote.dividendYield12m ?: existing.dy12m,
-                    roe = quote.roePercent ?: existing.roe,
+                    pl = safePl ?: existing.pl,
+                    pvp = safePvp ?: existing.pvp,
+                    dy12m = safeDy ?: existing.dy12m,
+                    roe = safeRoe ?: existing.roe,
                     liquidezDiariaMilhoes = quote.dailyVolumeBrlMillions ?: existing.liquidezDiariaMilhoes,
                     dataComDay = quote.dataComDay ?: existing.dataComDay,
                     paymentDay = quote.paymentDay ?: existing.paymentDay,
@@ -698,10 +720,10 @@ class LiveMarketDataRepository(
                 sector = "Consulta em Tempo Real",
                 price = quote.price,
                 changePercent1d = quote.changePercent1d,
-                dy12m = quote.dividendYield12m ?: 0.0,
-                pvp = quote.priceToBook ?: 0.0,
-                pl = quote.priceToEarnings ?: 0.0,
-                roe = quote.roePercent ?: 0.0,
+                dy12m = safeDy ?: 0.0,
+                pvp = safePvp ?: 0.0,
+                pl = safePl ?: 0.0,
+                roe = safeRoe ?: 0.0,
                 liquidezDiariaMilhoes = quote.dailyVolumeBrlMillions ?: 0.0,
                 inadimplenciaPercent = 0.0,
                 vacanciaPercent = 0.0,

@@ -1,5 +1,11 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -32,16 +38,22 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.ai.AudioVoiceRecorder
 import com.example.domain.model.AiAgentRole
 import com.example.domain.model.AiRecommendation
 import com.example.ui.components.ConclusionBadge
@@ -59,9 +71,12 @@ import com.example.ui.theme.MonoValueStyle
 import com.example.ui.theme.TextSecondary
 import com.example.ui.viewmodel.AiAgentUiState
 import com.example.ui.viewmodel.AiAgentsViewModel
+import com.example.ui.viewmodel.AiAudioUiState
 import com.example.ui.viewmodel.AnalysisFocus
 import com.example.ui.viewmodel.AnalysisHorizon
 import com.example.ui.viewmodel.InvestDashboardState
+import com.example.ui.viewmodel.VoiceCaptureMode
+import java.util.Locale
 
 @Composable
 fun AiAgentsScreen(
@@ -69,6 +84,7 @@ fun AiAgentsScreen(
     onSetConsent: (Boolean) -> Unit,
     aiAgentsViewModel: AiAgentsViewModel = viewModel()
 ) {
+    val context = LocalContext.current
     val promptInput by aiAgentsViewModel.promptInput.collectAsStateWithLifecycle()
     val aiUiState by aiAgentsViewModel.uiState.collectAsStateWithLifecycle()
     val savedHistory by aiAgentsViewModel.savedHistory.collectAsStateWithLifecycle()
@@ -77,8 +93,99 @@ fun AiAgentsScreen(
     val chatModelOption by aiAgentsViewModel.chatModelOption.collectAsStateWithLifecycle()
     val chatDraft by aiAgentsViewModel.chatDraft.collectAsStateWithLifecycle()
     val chatFocusedTicker by aiAgentsViewModel.chatFocusedTicker.collectAsStateWithLifecycle()
+    val useGoogleSearch by aiAgentsViewModel.useGoogleSearch.collectAsStateWithLifecycle()
+    val audioUiState by aiAgentsViewModel.audioUiState.collectAsStateWithLifecycle()
 
     var selectedTab by rememberSaveable { mutableIntStateOf(0) } // 0 = Chat Multi-Turno, 1 = Prompt Estruturado
+    var pendingCaptureMode by remember { mutableStateOf<VoiceCaptureMode?>(null) }
+
+    val audioRecorder = remember(context) { AudioVoiceRecorder(context.applicationContext) }
+    var ttsReady by remember { mutableStateOf(false) }
+    val textToSpeech: TextToSpeech? = remember(context) {
+        var engine: TextToSpeech? = null
+        runCatching {
+            TextToSpeech(context.applicationContext) { status ->
+                if (status == TextToSpeech.SUCCESS) {
+                    engine?.language = Locale("pt", "BR")
+                    ttsReady = true
+                }
+            }.apply {
+                engine = this
+                setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) = Unit
+                    override fun onDone(utteranceId: String?) {
+                        aiAgentsViewModel.resetAudioState()
+                    }
+                    @Deprecated("Deprecated in Java")
+                    override fun onError(utteranceId: String?) {
+                        aiAgentsViewModel.resetAudioState()
+                    }
+                })
+            }
+        }.getOrNull()
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            audioRecorder.cancelRecording()
+            runCatching {
+                textToSpeech?.stop()
+                textToSpeech?.shutdown()
+            }
+        }
+    }
+
+    fun startRecordingForMode(mode: VoiceCaptureMode) {
+        runCatching { textToSpeech?.stop() }
+        audioRecorder.startRecording()
+            .onSuccess { aiAgentsViewModel.setAudioRecordingState(mode) }
+            .onFailure { err ->
+                aiAgentsViewModel.setAudioError(
+                    err.localizedMessage ?: "Não foi possível iniciar o microfone neste dispositivo."
+                )
+            }
+    }
+
+    val recordAudioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val mode = pendingCaptureMode
+        pendingCaptureMode = null
+        if (granted && mode != null) {
+            startRecordingForMode(mode)
+        } else {
+            aiAgentsViewModel.setAudioError(
+                "Permissão de microfone negada. Habilite o microfone nas configurações do Android para transcrever áudio ou usar conversa por voz."
+            )
+        }
+    }
+
+    fun requestOrStartCapture(mode: VoiceCaptureMode) {
+        val hasPerm = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        if (hasPerm) {
+            startRecordingForMode(mode)
+        } else {
+            pendingCaptureMode = mode
+            recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    fun speakInPortuguese(rawReply: String) {
+        val cleanForSpeech = rawReply
+            .substringBefore("Fontes consultadas (Google Search):")
+            .replace(Regex("[*_#`]+"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .take(1_200)
+        if (ttsReady && textToSpeech != null && cleanForSpeech.isNotBlank()) {
+            textToSpeech.speak(cleanForSpeech, TextToSpeech.QUEUE_FLUSH, null, "invest_ai_voice_reply")
+        } else {
+            aiAgentsViewModel.resetAudioState()
+        }
+    }
 
     val selectedAsset = state.marketAssets.firstOrNull { it.ticker == promptInput.selectedTicker }
         ?: state.marketAssets.first()
@@ -93,7 +200,7 @@ fun AiAgentsScreen(
         item {
             if (aiAgentsViewModel.isLiveGeminiEnabled) {
                 DataDisclaimerBanner(
-                    text = "Gemini conectado via Firebase AI Logic + App Check (chat multi-turno com streaming e pareceres JSON). Dados pessoais da carteira permanecem isolados até autorização explícita.",
+                    text = "Gemini conectado via Firebase AI Logic + App Check (Search Grounding, transcrição de áudio, conversa por voz e pareceres JSON). Dados pessoais permanecem isolados até autorização explícita.",
                     isWarning = false
                 )
             } else {
@@ -176,11 +283,14 @@ fun AiAgentsScreen(
                     onSelectRole = aiAgentsViewModel::selectRole,
                     selectedModel = chatModelOption,
                     onSelectModel = aiAgentsViewModel::selectChatModel,
+                    useGoogleSearch = useGoogleSearch,
+                    onToggleGoogleSearch = aiAgentsViewModel::setUseGoogleSearch,
                     focusedTicker = chatFocusedTicker,
                     availableAssets = state.marketAssets,
                     onSelectFocusedTicker = aiAgentsViewModel::selectChatFocusedTicker,
                     messages = chatMessages,
                     chatUiState = chatUiState,
+                    audioUiState = audioUiState,
                     draft = chatDraft,
                     onDraftChange = aiAgentsViewModel::updateChatDraft,
                     onSendMessage = { text ->
@@ -191,6 +301,55 @@ fun AiAgentsScreen(
                             includePersonalPortfolio = consentGranted
                         )
                     },
+                    onToggleTranscribeAudio = {
+                        if (audioUiState is AiAudioUiState.Recording &&
+                            (audioUiState as AiAudioUiState.Recording).mode == VoiceCaptureMode.TRANSCRIBE_ONLY
+                        ) {
+                            audioRecorder.stopAndReadBytes()
+                                .onSuccess { bytes ->
+                                    aiAgentsViewModel.transcribeAudioToDraft(
+                                        audioBytes = bytes,
+                                        mimeType = AudioVoiceRecorder.MIME_TYPE_AUDIO_MP4
+                                    )
+                                }
+                                .onFailure { err ->
+                                    aiAgentsViewModel.setAudioError(
+                                        err.localizedMessage ?: "Erro ao finalizar gravação de áudio."
+                                    )
+                                }
+                        } else {
+                            requestOrStartCapture(VoiceCaptureMode.TRANSCRIBE_ONLY)
+                        }
+                    },
+                    onToggleVoiceConversation = {
+                        if (audioUiState is AiAudioUiState.Recording &&
+                            (audioUiState as AiAudioUiState.Recording).mode == VoiceCaptureMode.VOICE_CONVERSATION
+                        ) {
+                            audioRecorder.stopAndReadBytes()
+                                .onSuccess { bytes ->
+                                    aiAgentsViewModel.sendVoiceConversationAudio(
+                                        audioBytes = bytes,
+                                        mimeType = AudioVoiceRecorder.MIME_TYPE_AUDIO_MP4,
+                                        focusedAsset = chatAsset,
+                                        hhiReport = state.realHhi,
+                                        includePersonalPortfolio = consentGranted,
+                                        onReplyReadyToSpeak = ::speakInPortuguese
+                                    )
+                                }
+                                .onFailure { err ->
+                                    aiAgentsViewModel.setAudioError(
+                                        err.localizedMessage ?: "Erro ao finalizar conversa por voz."
+                                    )
+                                }
+                        } else {
+                            requestOrStartCapture(VoiceCaptureMode.VOICE_CONVERSATION)
+                        }
+                    },
+                    onStopSpeaking = {
+                        runCatching { textToSpeech?.stop() }
+                        aiAgentsViewModel.resetAudioState()
+                    },
+                    onDismissAudioError = aiAgentsViewModel::resetAudioState,
                     onClearHistory = aiAgentsViewModel::clearChatHistory,
                     onDismissError = aiAgentsViewModel::clearChatError
                 )

@@ -303,7 +303,10 @@ fun ConclusionBadge(conclusion: AiConclusion) {
 }
 
 @Composable
-fun GroupBadge(group: DataComGroup?) {
+fun GroupBadge(
+    group: DataComGroup?,
+    showGroupPrefix: Boolean = false
+) {
     if (group == null) return
     val color = when (group) {
         DataComGroup.G1 -> EmeraldPrimary
@@ -317,7 +320,7 @@ fun GroupBadge(group: DataComGroup?) {
         border = BorderStroke(1.dp, color.copy(alpha = 0.5f))
     ) {
         Text(
-            text = group.code,
+            text = if (showGroupPrefix) "Grupo ${group.code}" else group.code,
             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
             color = color,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
@@ -458,13 +461,16 @@ fun AssetDetailSheetContent(
 
         FintechCard {
             val valuation = com.example.domain.model.ValuationAndComparisonCalculator.computeValuation(asset)
+            val pvpDisplay = if (asset.pvp in 0.05..30.0) String.format(ptBrLocale, "%.2fx", asset.pvp) else "N/D"
+            val plDisplay = if (asset.pl in 0.1..500.0) String.format(ptBrLocale, "%.2fx", asset.pl) else "N/D"
+            val dyDisplay = if (asset.dy12m in 0.01..80.0) formatPct(asset.dy12m, false) else "N/D"
             val metrics = listOf(
-                "DY (12m)" to formatPct(asset.dy12m, false),
-                "P/VP" to String.format(ptBrLocale, "%.2fx", asset.pvp),
-                "P/L" to String.format(ptBrLocale, "%.2fx", asset.pl),
+                "DY (12m)" to dyDisplay,
+                "P/VP" to pvpDisplay,
+                "P/L" to plDisplay,
                 "Liquidez Diária" to "R$ ${String.format(ptBrLocale, "%.1f", asset.liquidezDiariaMilhoes)}M",
                 "IFR (14)" to String.format(ptBrLocale, "%.1f", asset.rsi14),
-                "Data-Com" to (asset.dataComDay?.let { "Dia $it (${asset.dataComGroup?.code})" } ?: "N/A"),
+                "Data-Com" to (asset.dataComDay?.let { "Dia $it (Grupo ${asset.dataComGroup?.code})" } ?: "N/A"),
                 "Teto Bazin (6%)" to (valuation.bazinCeilingPriceBrl?.let { formatBrl(it) } ?: "N/A"),
                 valuation.fairPriceMethodLabel to (valuation.grahamFairPriceBrl?.let { formatBrl(it) } ?: "N/A")
             )

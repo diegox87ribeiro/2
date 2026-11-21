@@ -60,8 +60,14 @@ interface AiRepository {
         userMessage: String,
         focusedAsset: MarketAsset?,
         hhiReport: HhiRiskReport,
-        includePersonalPortfolio: Boolean
+        includePersonalPortfolio: Boolean,
+        useGoogleSearch: Boolean = false
     ): Flow<String>
+
+    suspend fun transcribeAudio(
+        audioBytes: ByteArray,
+        mimeType: String
+    ): String
 }
 
 /**
@@ -78,15 +84,24 @@ class PlaceholderAiRepository : AiRepository {
         userMessage: String,
         focusedAsset: MarketAsset?,
         hhiReport: HhiRiskReport,
-        includePersonalPortfolio: Boolean
+        includePersonalPortfolio: Boolean,
+        useGoogleSearch: Boolean
     ): Flow<String> = flow {
         delay(120)
         val assetNote = focusedAsset?.let { " sobre ${it.ticker} (${it.assetClass.label})" } ?: ""
+        val searchNote = if (useGoogleSearch) " [Search Grounding indisponível offline]" else ""
         emit(
-            "[EXEMPLO DEMONSTRATIVO • ${role.title} • ${modelOption.label}] " +
+            "[EXEMPLO DEMONSTRATIVO • ${role.title} • ${modelOption.label}]$searchNote " +
                 "Resposta simulada$assetNote para \"$userMessage\". " +
                 "Para conversas reais ao vivo com o Gemini no Android, utilize o Firebase AI Logic habilitado."
         )
+    }
+
+    override suspend fun transcribeAudio(
+        audioBytes: ByteArray,
+        mimeType: String
+    ): String {
+        throw IllegalStateException("Transcrição de áudio requer Firebase AI Logic ativo.")
     }
 
     override suspend fun generateRecommendation(

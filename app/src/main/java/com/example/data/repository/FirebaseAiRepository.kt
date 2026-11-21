@@ -9,6 +9,7 @@ import com.google.firebase.Firebase
 import com.google.firebase.ai.GenerativeModel
 import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.Schema
+import com.google.firebase.ai.type.Tool
 import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
 import kotlinx.coroutines.flow.Flow
@@ -101,6 +102,57 @@ class FirebaseAiRepository : AiRepository {
         )
     }
 
+    private val generalSearchChatModel: GenerativeModel by lazy {
+        Firebase.ai.generativeModel(
+            modelName = GeminiTaskModel.GENERAL.modelId,
+            generationConfig = generationConfig { temperature = 0.3f },
+            tools = listOf(Tool.googleSearch()),
+            systemInstruction = baseSystemInstruction
+        )
+    }
+
+    private val fastSearchChatModel: GenerativeModel by lazy {
+        Firebase.ai.generativeModel(
+            modelName = GeminiTaskModel.FAST.modelId,
+            generationConfig = generationConfig { temperature = 0.25f },
+            tools = listOf(Tool.googleSearch()),
+            systemInstruction = baseSystemInstruction
+        )
+    }
+
+    private val deepSearchChatModel: GenerativeModel by lazy {
+        Firebase.ai.generativeModel(
+            modelName = GeminiTaskModel.DEEP_REASONING.modelId,
+            generationConfig = generationConfig { temperature = 0.25f },
+            tools = listOf(Tool.googleSearch()),
+            systemInstruction = baseSystemInstruction
+        )
+    }
+
+    private val audioTranscriptionModel: GenerativeModel by lazy {
+        Firebase.ai.generativeModel(
+            modelName = GeminiTaskModel.GENERAL.modelId,
+            generationConfig = generationConfig { temperature = 0.1f }
+        )
+    }
+
+    override suspend fun transcribeAudio(
+        audioBytes: ByteArray,
+        mimeType: String
+    ): String {
+        val prompt = content {
+            inlineData(bytes = audioBytes, mimeType = mimeType)
+            text(
+                "Transcreva fielmente em português do Brasil o áudio gravado pelo investidor. " +
+                    "Retorne apenas o texto transcrito, preservando siglas de ativos da B3 (ex.: MXRF11, SMRE11, VALE3, HGLG11, PETR4), " +
+                    "sem comentários extras ou marcações."
+            )
+        }
+        val response = audioTranscriptionModel.generateContent(prompt)
+        return response.text?.trim()?.takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("Não foi possível transcrever fala compreensível no áudio gravado.")
+    }
+
     override fun streamChatReply(
         role: AiAgentRole,
         modelOption: GeminiTaskModel,
@@ -108,12 +160,21 @@ class FirebaseAiRepository : AiRepository {
         userMessage: String,
         focusedAsset: MarketAsset?,
         hhiReport: HhiRiskReport,
-        includePersonalPortfolio: Boolean
+        includePersonalPortfolio: Boolean,
+        useGoogleSearch: Boolean
     ): Flow<String> = flow {
-        val activeModel = when (modelOption) {
-            GeminiTaskModel.GENERAL -> generalChatModel
-            GeminiTaskModel.FAST -> fastChatModel
-            GeminiTaskModel.DEEP_REASONING -> deepChatModel
+        val activeModel = if (useGoogleSearch) {
+            when (modelOption) {
+                GeminiTaskModel.GENERAL -> generalSearchChatModel
+                GeminiTaskModel.FAST -> fastSearchChatModel
+                GeminiTaskModel.DEEP_REASONING -> deepSearchChatModel
+            }
+        } else {
+            when (modelOption) {
+                GeminiTaskModel.GENERAL -> generalChatModel
+                GeminiTaskModel.FAST -> fastChatModel
+                GeminiTaskModel.DEEP_REASONING -> deepChatModel
+            }
         }
 
         val roleInstruction = when (role) {
@@ -126,10 +187,12 @@ class FirebaseAiRepository : AiRepository {
         }
 
         val assetContext = focusedAsset?.let { asset ->
+            val safePvp = if (asset.pvp in 0.05..30.0) "${"%.2f".format(asset.pvp)}x" else "N/D"
+            val safeDy = if (asset.dy12m in 0.01..80.0) "${"%.2f".format(asset.dy12m)}%" else "N/D"
             "\nAtivo em foco (${if (asset.isDemoData) "BASE DEMONSTRATIVA" else "BASE IMPORTADA"}): " +
                 "${asset.ticker} - ${asset.name} (${asset.assetClass.label}, setor ${asset.sector}), " +
-                "Preço R$ ${"%.2f".format(asset.price)}, DY ${"%.2f".format(asset.dy12m)}%, " +
-                "P/VP ${"%.2f".format(asset.pvp)}x, Liquidez R$ ${"%.1f".format(asset.liquidezDiariaMilhoes)}M, " +
+                "Preço R$ ${"%.2f".format(asset.price)}, DY $safeDy, " +
+                "P/VP $safePvp, Liquidez R$ ${"%.1f".format(asset.liquidezDiariaMilhoes)}M, " +
                 "Base ${asset.dataBaseDate}, Fonte ${asset.sourceLabel}."
         }.orEmpty()
 
@@ -140,19 +203,46 @@ class FirebaseAiRepository : AiRepository {
             "\nDados pessoais da carteira: ISOLADOS LOCALMENTE (não inferir posições pessoais)."
         }
 
+        val searchHint = if (useGoogleSearch) {
+            "\nPesquisa Google (Search Grounding) ATIVADA: consulte dados atuais na web (B3, CVM, RI, Fatos Relevantes, proventos e notícias recentes) e cite as fontes."
+        } else {
+            ""
+        }
+
         val firebaseHistory = history.takeLast(20).map { turn ->
             val roleKey = if (turn.senderRole.equals("USER", ignoreCase = true)) "user" else "model"
             content(roleKey) { text(turn.text) }
         }
 
         val chat = activeModel.startChat(history = firebaseHistory)
-        val composedPrompt = "$roleInstruction$assetContext$privacyContext\n\nMensagem do investidor: $userMessage"
+        val composedPrompt = "$roleInstruction$assetContext$privacyContext$searchHint\n\nMensagem do investidor: $userMessage"
 
+        val groundingSources = linkedMapOf<String, String>()
         chat.sendMessageStream(composedPrompt).collect { chunk ->
             val delta = chunk.text.orEmpty()
             if (delta.isNotEmpty()) {
                 emit(delta)
             }
+            if (useGoogleSearch) {
+                chunk.candidates.firstOrNull()?.groundingMetadata?.groundingChunks?.forEach { gChunk ->
+                    val web = gChunk.web
+                    val uri = web?.uri?.takeIf { it.isNotBlank() }
+                    val title = web?.title?.takeIf { it.isNotBlank() } ?: uri
+                    if (uri != null && title != null) {
+                        groundingSources[uri] = title
+                    }
+                }
+            }
+        }
+
+        if (useGoogleSearch && groundingSources.isNotEmpty()) {
+            val sourcesBlock = buildString {
+                append("\n\nFontes consultadas (Google Search):")
+                groundingSources.entries.take(5).forEach { (uri, title) ->
+                    append("\n• $title ($uri)")
+                }
+            }
+            emit(sourcesBlock)
         }
     }
 

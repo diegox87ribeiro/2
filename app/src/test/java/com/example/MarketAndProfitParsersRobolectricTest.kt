@@ -204,4 +204,63 @@ class MarketAndProfitParsersRobolectricTest {
         assertEquals(16, merged.paymentDay)
         assertEquals(false, merged.isDemoData)
     }
+
+    @Test
+    fun `parsers block PVP card bleed like 59360,38 and avoid bogus Yahoo G1 Data-Com for FIIs`() {
+        val corruptedInv10Html = """
+            <div class="_card"><span class="title">Cotação</span><div class="_card-body"><span class="value">R$ 56,30</span></div></div>
+            <div class="_card"><span class="title">P/VP</span><div class="_card-body"><span class="value">-</span></div></div>
+            <div class="_card"><span class="title">Liquidez Diária</span><div class="_card-body"><span class="value">59.360,38</span></div></div>
+            <table>
+              <tr><td><span>Dividendos</span></td><td><span>30/10/2026</span></td><td><span>16/11/2026</span></td><td><span>R$ 1,00</span></td></tr>
+            </table>
+        """.trimIndent()
+        val parsedInv10 = LiveQuoteParsers.parseInvestidor10Html("SMRE11", corruptedInv10Html)!!
+        assertEquals(56.30, parsedInv10.price!!, 0.001)
+        org.junit.Assert.assertNull(parsedInv10.priceToBook)
+        assertEquals(30, parsedInv10.dataComDay)
+        assertEquals(16, parsedInv10.paymentDay)
+        assertEquals(1.00, parsedInv10.lastDividendBrl!!, 0.001)
+
+        val yahooSingleDivFii = """
+            {
+              "chart": {
+                "result": [{
+                  "meta": {
+                    "longName": "Fundo De Investimento Imobiliario Smart Real Estate",
+                    "regularMarketPrice": 56.30,
+                    "regularMarketPreviousClose": 56.10
+                  },
+                  "indicators": { "quote": [{ "close": [56.0, 56.10, 56.30] }] },
+                  "events": {
+                    "dividends": {
+                      "1762128000": { "amount": 1.00, "date": 1762128000 }
+                    }
+                  }
+                }]
+              }
+            }
+        """.trimIndent()
+        val parsedYahoo = LiveQuoteParsers.parseYahooChartJson("SMRE11", yahooSingleDivFii)!!
+        assertEquals(56.30, parsedYahoo.price!!, 0.001)
+        org.junit.Assert.assertNull(parsedYahoo.dataComDay)
+        org.junit.Assert.assertNull(parsedYahoo.dividendYield12m)
+
+        val badQuote = com.example.domain.model.LiveMarketQuote(
+            ticker = "SMRE11",
+            companyName = "Smart Real Estate FII",
+            price = 56.30,
+            changePercent1d = 0.35,
+            priceToBook = 59360.38,
+            dividendYield12m = 1.78,
+            primarySourceLabel = "Yahoo Finance",
+            consultedSources = listOf("Yahoo Finance"),
+            fetchedAtMillis = 1_763_650_000_000L,
+            marketTimestampLabel = "20/11/2026 15:59",
+            b3PageUrl = "https://www.b3.com.br",
+            advfnPageUrl = "https://br.advfn.com"
+        )
+        val mergedNew = com.example.data.repository.LiveMarketDataRepository.mergeLiveQuoteIntoMarketAsset(null, badQuote)
+        assertEquals(0.0, mergedNew.pvp, 0.001)
+    }
 }

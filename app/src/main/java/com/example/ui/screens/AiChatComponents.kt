@@ -19,10 +19,18 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
@@ -31,6 +39,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -58,7 +67,9 @@ import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.SubtleBorder
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.VioletAccent
+import com.example.ui.viewmodel.AiAudioUiState
 import com.example.ui.viewmodel.AiChatUiState
+import com.example.ui.viewmodel.VoiceCaptureMode
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -69,19 +80,32 @@ fun MultiTurnGeminiChatPanel(
     onSelectRole: (AiAgentRole) -> Unit,
     selectedModel: GeminiTaskModel,
     onSelectModel: (GeminiTaskModel) -> Unit,
+    useGoogleSearch: Boolean = true,
+    onToggleGoogleSearch: (Boolean) -> Unit = {},
     focusedTicker: String?,
     availableAssets: List<MarketAsset>,
     onSelectFocusedTicker: (String?) -> Unit,
     messages: List<ChatMessageEntity>,
     chatUiState: AiChatUiState,
+    audioUiState: AiAudioUiState = AiAudioUiState.Idle,
     draft: String,
     onDraftChange: (String) -> Unit,
     onSendMessage: (String) -> Unit,
+    onToggleTranscribeAudio: () -> Unit = {},
+    onToggleVoiceConversation: () -> Unit = {},
+    onStopSpeaking: () -> Unit = {},
+    onDismissAudioError: () -> Unit = {},
     onClearHistory: () -> Unit,
     onDismissError: () -> Unit
 ) {
     val listState = rememberLazyListState()
-    val isBusy = chatUiState is AiChatUiState.Loading || chatUiState is AiChatUiState.Streaming
+    val isBusy = chatUiState is AiChatUiState.Loading ||
+        chatUiState is AiChatUiState.Streaming ||
+        audioUiState is AiAudioUiState.Processing
+    val isRecordingTranscribe = audioUiState is AiAudioUiState.Recording &&
+        audioUiState.mode == VoiceCaptureMode.TRANSCRIBE_ONLY
+    val isRecordingVoiceChat = audioUiState is AiAudioUiState.Recording &&
+        audioUiState.mode == VoiceCaptureMode.VOICE_CONVERSATION
 
     LaunchedEffect(messages.size, chatUiState) {
         val targetIndex = when {
@@ -167,6 +191,54 @@ fun MultiTurnGeminiChatPanel(
                 selected = focusedTicker,
                 onSelect = onSelectFocusedTicker
             )
+
+            Spacer(Modifier.height(10.dp))
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = DeepNavySurface,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(
+                        1.dp,
+                        if (useGoogleSearch) EmeraldPrimary.copy(alpha = 0.45f) else SubtleBorder,
+                        RoundedCornerShape(12.dp)
+                    )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        Icon(
+                            Icons.Default.Public,
+                            contentDescription = "Pesquisa Google em tempo real",
+                            tint = if (useGoogleSearch) EmeraldPrimary else TextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                "Pesquisa Google (Search Grounding)",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = if (useGoogleSearch) EmeraldPrimary else MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                "Busca fatos relevantes, notícias e proventos recentes com citações da web",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = useGoogleSearch,
+                        onCheckedChange = onToggleGoogleSearch,
+                        modifier = Modifier.testTag("ai_google_search_switch")
+                    )
+                }
+            }
         }
 
         FintechCard(borderColor = SubtleBorder) {
@@ -239,7 +311,137 @@ fun MultiTurnGeminiChatPanel(
                 }
             }
 
-            Spacer(Modifier.height(12.dp))
+            if (audioUiState !is AiAudioUiState.Idle) {
+                Spacer(Modifier.height(10.dp))
+                val bannerColor = when (audioUiState) {
+                    is AiAudioUiState.Recording -> CoralRed
+                    is AiAudioUiState.Processing -> ElectricCyan
+                    is AiAudioUiState.Speaking -> EmeraldPrimary
+                    is AiAudioUiState.Error -> CoralRed
+                    AiAudioUiState.Idle -> SubtleBorder
+                }
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = bannerColor.copy(alpha = 0.14f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, bannerColor.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+                        .testTag("ai_audio_status_banner")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            when (audioUiState) {
+                                is AiAudioUiState.Processing -> CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = ElectricCyan
+                                )
+                                else -> Icon(
+                                    Icons.Default.GraphicEq,
+                                    contentDescription = null,
+                                    tint = bannerColor,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = when (audioUiState) {
+                                    is AiAudioUiState.Recording -> if (audioUiState.mode == VoiceCaptureMode.VOICE_CONVERSATION) {
+                                        "Gravando conversa por voz... toque em Parar para enviar ao Gemini."
+                                    } else {
+                                        "Gravando áudio para transcrição... toque novamente no microfone para transcrever."
+                                    }
+                                    is AiAudioUiState.Processing -> audioUiState.statusLabel
+                                    is AiAudioUiState.Speaking -> "Falando resposta do ${selectedRole.title}..."
+                                    is AiAudioUiState.Error -> audioUiState.message
+                                    AiAudioUiState.Idle -> ""
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        if (audioUiState is AiAudioUiState.Speaking) {
+                            TextButton(
+                                onClick = onStopSpeaking,
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("ai_stop_speaking_button")
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.VolumeOff, contentDescription = null, tint = EmeraldPrimary, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Parar Voz", color = EmeraldPrimary)
+                            }
+                        } else if (audioUiState is AiAudioUiState.Error) {
+                            TextButton(
+                                onClick = onDismissAudioError,
+                                modifier = Modifier.minimumInteractiveComponentSize()
+                            ) {
+                                Text("Fechar", color = CoralRed)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onToggleTranscribeAudio,
+                    enabled = !isBusy && !isRecordingVoiceChat,
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
+                        .testTag("ai_transcribe_audio_button")
+                ) {
+                    Icon(
+                        imageVector = if (isRecordingTranscribe) Icons.Default.Stop else Icons.Default.Mic,
+                        contentDescription = "Transcrever áudio pelo microfone",
+                        tint = if (isRecordingTranscribe) CoralRed else ElectricCyan,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        if (isRecordingTranscribe) "Parar e Transcrever" else "Transcrever Áudio",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (isRecordingTranscribe) CoralRed else ElectricCyan
+                    )
+                }
+
+                Button(
+                    onClick = onToggleVoiceConversation,
+                    enabled = !isBusy && !isRecordingTranscribe,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isRecordingVoiceChat) CoralRed else VioletAccent,
+                        contentColor = EmeraldOnPrimary
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
+                        .testTag("ai_voice_conversation_button")
+                ) {
+                    Icon(
+                        imageVector = if (isRecordingVoiceChat) Icons.Default.Stop else Icons.Default.RecordVoiceOver,
+                        contentDescription = "Conversa por voz com o agente Gemini",
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        if (isRecordingVoiceChat) "Enviar Voz" else "Conversa por Voz",
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.Bottom,
@@ -249,7 +451,7 @@ fun MultiTurnGeminiChatPanel(
                     value = draft,
                     onValueChange = onDraftChange,
                     label = { Text("Pergunte ao ${selectedRole.title}...") },
-                    placeholder = { Text("Ex.: Compare P/VP, DY e risco HHI") },
+                    placeholder = { Text("Digite ou grave áudio sobre ativos, P/VP, DY...") },
                     maxLines = 4,
                     modifier = Modifier
                         .weight(1f)

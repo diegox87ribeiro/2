@@ -19,6 +19,9 @@ import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.WarningAmber
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenuItem
@@ -31,6 +34,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -135,6 +139,11 @@ fun AssetPositionDetailAndEditSheet(
     val previewPnlPct = if (parsedCur != null && previewCost > 0.0) (previewPnlBrl / previewCost) * 100.0 else 0.0
     val weightPct = if (portfolioTotalInvestedBrl > 0.0) (previewCurrent / portfolioTotalInvestedBrl) * 100.0 else 0.0
     val parsedDataCom = dataComText.trim().toIntOrNull()?.takeIf { it in 1..31 }
+    val marketDataComDay = catalogAsset?.dataComDay?.takeIf { it in 1..31 }
+    val effectiveDataComDay = parsedDataCom ?: marketDataComDay
+    val effectiveGroup = DataComGroup.fromDay(effectiveDataComDay)
+    val marketGroup = DataComGroup.fromDay(marketDataComDay)
+    val hasDataComDivergence = parsedDataCom != null && marketDataComDay != null && parsedDataCom != marketDataComDay
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -170,7 +179,16 @@ fun AssetPositionDetailAndEditSheet(
                         color = TextSecondary
                     )
                 }
-                GroupBadge(DataComGroup.fromDay(parsedDataCom ?: catalogAsset?.dataComDay))
+                Column(horizontalAlignment = Alignment.End) {
+                    GroupBadge(effectiveGroup, showGroupPrefix = true)
+                    if (effectiveDataComDay != null && effectiveGroup != null) {
+                        Text(
+                            "Dia $effectiveDataComDay • ${effectiveGroup.label.substringAfter("• ")}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextSecondary
+                        )
+                    }
+                }
             }
 
             FintechCard(borderColor = EmeraldPrimary.copy(alpha = 0.35f)) {
@@ -218,22 +236,76 @@ fun AssetPositionDetailAndEditSheet(
                         color = TextSecondary
                     )
                     Spacer(Modifier.height(8.dp))
+                    val safeDyLabel = if (catalogAsset.dy12m in 0.01..80.0) formatPct(catalogAsset.dy12m, false) else "N/D"
+                    val safePvpLabel = if (catalogAsset.pvp in 0.05..30.0) {
+                        String.format(Locale("pt", "BR"), "%.2fx", catalogAsset.pvp)
+                    } else {
+                        "N/D"
+                    }
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Column {
                             Text("DY (12m)", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
-                            Text(formatPct(catalogAsset.dy12m, false), style = MonoValueStyle, color = EmeraldPrimary)
+                            Text(safeDyLabel, style = MonoValueStyle, color = EmeraldPrimary)
                         }
                         Column {
                             Text("P/VP", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
-                            Text(String.format(Locale("pt", "BR"), "%.2fx", catalogAsset.pvp), style = MonoValueStyle)
+                            Text(safePvpLabel, style = MonoValueStyle, modifier = Modifier.testTag("sheet_market_pvp_value"))
                         }
                         Column {
-                            Text("Data-Com", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
                             Text(
-                                catalogAsset.dataComDay?.let { "Dia $it (${catalogAsset.dataComGroup?.code})" } ?: "N/A",
-                                style = MonoValueStyle,
-                                color = ElectricCyan
+                                if (parsedDataCom != null) "Data-Com (Cadastro)" else "Data-Com",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary
                             )
+                            Text(
+                                effectiveDataComDay?.let { "Dia $it (Grupo ${effectiveGroup?.code})" } ?: "N/D",
+                                style = MonoValueStyle,
+                                color = ElectricCyan,
+                                modifier = Modifier.testTag("sheet_market_datacom_value")
+                            )
+                        }
+                    }
+                    if (hasDataComDivergence) {
+                        Spacer(Modifier.height(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = AmberGold.copy(alpha = 0.14f),
+                            border = BorderStroke(1.dp, AmberGold.copy(alpha = 0.45f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("datacom_divergence_banner")
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        Icons.Default.WarningAmber,
+                                        contentDescription = "Divergência de Data-Com",
+                                        tint = AmberGold,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        "Divergência de Data-Com / Grupo",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = AmberGold
+                                    )
+                                }
+                                Text(
+                                    "Seu cadastro usa Dia $parsedDataCom (Grupo ${DataComGroup.fromDay(parsedDataCom)?.code}), " +
+                                        "enquanto a fonte externa informou Dia $marketDataComDay (Grupo ${marketGroup?.code}).",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                TextButton(
+                                    onClick = { dataComText = marketDataComDay.toString() },
+                                    modifier = Modifier.testTag("sync_market_datacom_button")
+                                ) {
+                                    Text(
+                                        "Adotar Dia $marketDataComDay (Grupo ${marketGroup?.code})",
+                                        color = AmberGold
+                                    )
+                                }
+                            }
                         }
                     }
                     Spacer(Modifier.height(6.dp))
@@ -266,6 +338,16 @@ fun AssetPositionDetailAndEditSheet(
                         .testTag("edit_pos_datacom")
                 )
             }
+            Text(
+                text = if (effectiveGroup != null && effectiveDataComDay != null) {
+                    "Classificação automática do Grupo Data-Com: Grupo ${effectiveGroup.code} (${effectiveGroup.label.substringAfter("• ")})"
+                } else {
+                    "Informe o dia da Data-Com (1–31) para classificar entre G1 (1–8), G2 (9–16), G3 (17–24) e G4 (25–31)."
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = ElectricCyan,
+                modifier = Modifier.testTag("edit_pos_group_helper")
+            )
 
             OutlinedTextField(
                 value = name,

@@ -80,6 +80,19 @@ sealed interface AiChatUiState {
     data class Error(val message: String) : AiChatUiState
 }
 
+enum class VoiceCaptureMode {
+    TRANSCRIBE_ONLY,
+    VOICE_CONVERSATION
+}
+
+sealed interface AiAudioUiState {
+    data object Idle : AiAudioUiState
+    data class Recording(val mode: VoiceCaptureMode) : AiAudioUiState
+    data class Processing(val statusLabel: String) : AiAudioUiState
+    data class Speaking(val replyPreview: String) : AiAudioUiState
+    data class Error(val message: String) : AiAudioUiState
+}
+
 /**
  * ViewModel dedicado para gerenciar a interação estruturada e o chat multi-turno
  * com os agentes especializados (Analista, Gestor e Auditor) via Firebase AI Logic (Gemini).
@@ -120,6 +133,12 @@ class AiAgentsViewModel(application: Application) : AndroidViewModel(application
 
     private val _chatUiState = MutableStateFlow<AiChatUiState>(AiChatUiState.Idle)
     val chatUiState: StateFlow<AiChatUiState> = _chatUiState.asStateFlow()
+
+    private val _useGoogleSearch = MutableStateFlow(true)
+    val useGoogleSearch: StateFlow<Boolean> = _useGoogleSearch.asStateFlow()
+
+    private val _audioUiState = MutableStateFlow<AiAudioUiState>(AiAudioUiState.Idle)
+    val audioUiState: StateFlow<AiAudioUiState> = _audioUiState.asStateFlow()
 
     val savedHistory: StateFlow<List<SavedAiRecommendationEntity>> = aiDao.observeSaved()
         .stateIn(
@@ -192,6 +211,110 @@ class AiAgentsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun setUseGoogleSearch(enabled: Boolean) {
+        _useGoogleSearch.value = enabled
+    }
+
+    fun setAudioRecordingState(mode: VoiceCaptureMode) {
+        _audioUiState.value = AiAudioUiState.Recording(mode)
+    }
+
+    fun setAudioSpeakingState(replyPreview: String) {
+        _audioUiState.value = AiAudioUiState.Speaking(replyPreview)
+    }
+
+    fun setAudioError(message: String) {
+        _audioUiState.value = AiAudioUiState.Error(message)
+    }
+
+    fun resetAudioState() {
+        _audioUiState.value = AiAudioUiState.Idle
+    }
+
+    fun transcribeAudioToDraft(
+        audioBytes: ByteArray,
+        mimeType: String
+    ) {
+        if (!isFirebaseReady()) {
+            _audioUiState.value = AiAudioUiState.Error(
+                "Transcrição de áudio requer Firebase AI Logic ativo neste APK."
+            )
+            return
+        }
+        viewModelScope.launch {
+            _audioUiState.value = AiAudioUiState.Processing("Transcrevendo áudio com Gemini...")
+            try {
+                val transcript = withTimeout(60_000L) {
+                    aiRepository.transcribeAudio(audioBytes = audioBytes, mimeType = mimeType)
+                }
+                val current = _chatDraft.value.trim()
+                _chatDraft.value = if (current.isEmpty()) transcript else "$current $transcript"
+                _audioUiState.value = AiAudioUiState.Idle
+            } catch (e: TimeoutCancellationException) {
+                Log.e(TAG, "Gemini audio transcription timed out", e)
+                _audioUiState.value = AiAudioUiState.Error(
+                    "Tempo limite de 60s atingido na transcrição do áudio. Tente novamente."
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Gemini audio transcription failed", e)
+                _audioUiState.value = AiAudioUiState.Error(
+                    e.localizedMessage ?: "Falha ao transcrever o áudio gravado."
+                )
+            }
+        }
+    }
+
+    fun sendVoiceConversationAudio(
+        audioBytes: ByteArray,
+        mimeType: String,
+        focusedAsset: MarketAsset?,
+        hhiReport: HhiRiskReport,
+        includePersonalPortfolio: Boolean,
+        onReplyReadyToSpeak: (String) -> Unit
+    ) {
+        if (!isFirebaseReady()) {
+            _audioUiState.value = AiAudioUiState.Error(
+                "Conversa por voz requer Firebase AI Logic ativo neste APK."
+            )
+            return
+        }
+        viewModelScope.launch {
+            _audioUiState.value = AiAudioUiState.Processing("Ouvindo e transcrevendo sua pergunta...")
+            try {
+                val transcript = withTimeout(60_000L) {
+                    aiRepository.transcribeAudio(audioBytes = audioBytes, mimeType = mimeType)
+                }
+                _audioUiState.value = AiAudioUiState.Processing("Consultando ${_promptInput.value.selectedRole.title}...")
+                val reply = executeChatTurn(
+                    trimmed = transcript,
+                    focusedAsset = focusedAsset,
+                    hhiReport = hhiReport,
+                    includePersonalPortfolio = includePersonalPortfolio
+                )
+                if (!reply.isNullOrBlank()) {
+                    _audioUiState.value = AiAudioUiState.Speaking(reply.take(140))
+                    onReplyReadyToSpeak(reply)
+                } else {
+                    _audioUiState.value = AiAudioUiState.Idle
+                }
+            } catch (e: TimeoutCancellationException) {
+                Log.e(TAG, "Gemini voice conversation timed out", e)
+                _audioUiState.value = AiAudioUiState.Error(
+                    "Tempo limite de 60s atingido na conversa por voz. Tente novamente."
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Gemini voice conversation failed", e)
+                _audioUiState.value = AiAudioUiState.Error(
+                    e.localizedMessage ?: "Falha na conversa por voz com o Gemini."
+                )
+            }
+        }
+    }
+
     fun sendChatMessage(
         messageText: String = _chatDraft.value,
         focusedAsset: MarketAsset?,
@@ -211,74 +334,94 @@ class AiAgentsViewModel(application: Application) : AndroidViewModel(application
             return
         }
 
+        _chatDraft.value = ""
+        viewModelScope.launch {
+            executeChatTurn(
+                trimmed = trimmed,
+                focusedAsset = focusedAsset,
+                hhiReport = hhiReport,
+                includePersonalPortfolio = includePersonalPortfolio
+            )
+        }
+    }
+
+    private suspend fun executeChatTurn(
+        trimmed: String,
+        focusedAsset: MarketAsset?,
+        hhiReport: HhiRiskReport,
+        includePersonalPortfolio: Boolean
+    ): String? {
         val activeRole = _promptInput.value.selectedRole
         val modelOption = _chatModelOption.value
+        val searchEnabled = _useGoogleSearch.value
         val historySnapshot = chatMessages.value.map {
             ChatTurn(senderRole = it.senderRole, text = it.content)
         }
 
-        _chatDraft.value = ""
-        viewModelScope.launch {
-            _chatUiState.value = AiChatUiState.Loading(activeRole, modelOption.label)
-            try {
+        _chatUiState.value = AiChatUiState.Loading(activeRole, modelOption.label)
+        return try {
+            chatDao.insert(
+                ChatMessageEntity(
+                    senderRole = "USER",
+                    agentRole = activeRole.name,
+                    modelName = modelOption.modelId,
+                    content = trimmed,
+                    usedPersonalData = includePersonalPortfolio
+                )
+            )
+
+            val accumulated = StringBuilder()
+            withTimeout(60_000L) {
+                aiRepository.streamChatReply(
+                    role = activeRole,
+                    modelOption = modelOption,
+                    history = historySnapshot,
+                    userMessage = trimmed,
+                    focusedAsset = focusedAsset,
+                    hhiReport = hhiReport,
+                    includePersonalPortfolio = includePersonalPortfolio,
+                    useGoogleSearch = searchEnabled
+                ).collect { chunk ->
+                    accumulated.append(chunk)
+                    _chatUiState.value = AiChatUiState.Streaming(
+                        partialText = accumulated.toString(),
+                        role = activeRole,
+                        modelLabel = modelOption.label
+                    )
+                }
+            }
+
+            val finalReply = accumulated.toString().trim()
+            if (finalReply.isEmpty()) {
+                _chatUiState.value = AiChatUiState.Error("O modelo Gemini retornou uma resposta vazia.")
+                null
+            } else {
                 chatDao.insert(
                     ChatMessageEntity(
-                        senderRole = "USER",
+                        senderRole = "MODEL",
                         agentRole = activeRole.name,
-                        modelName = modelOption.modelId,
-                        content = trimmed,
+                        modelName = if (searchEnabled) "${modelOption.modelId} + Search" else modelOption.modelId,
+                        content = finalReply,
                         usedPersonalData = includePersonalPortfolio
                     )
                 )
-
-                val accumulated = StringBuilder()
-                withTimeout(60_000L) {
-                    aiRepository.streamChatReply(
-                        role = activeRole,
-                        modelOption = modelOption,
-                        history = historySnapshot,
-                        userMessage = trimmed,
-                        focusedAsset = focusedAsset,
-                        hhiReport = hhiReport,
-                        includePersonalPortfolio = includePersonalPortfolio
-                    ).collect { chunk ->
-                        accumulated.append(chunk)
-                        _chatUiState.value = AiChatUiState.Streaming(
-                            partialText = accumulated.toString(),
-                            role = activeRole,
-                            modelLabel = modelOption.label
-                        )
-                    }
-                }
-
-                val finalReply = accumulated.toString().trim()
-                if (finalReply.isEmpty()) {
-                    _chatUiState.value = AiChatUiState.Error("O modelo Gemini retornou uma resposta vazia.")
-                } else {
-                    chatDao.insert(
-                        ChatMessageEntity(
-                            senderRole = "MODEL",
-                            agentRole = activeRole.name,
-                            modelName = modelOption.modelId,
-                            content = finalReply,
-                            usedPersonalData = includePersonalPortfolio
-                        )
-                    )
-                    _chatUiState.value = AiChatUiState.Idle
-                }
-            } catch (e: TimeoutCancellationException) {
-                Log.e(TAG, "Gemini multi-turn chat timed out", e)
-                _chatUiState.value = AiChatUiState.Error(
-                    "Tempo limite de 60s atingido na resposta do chat. Tente novamente."
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e(TAG, "Gemini multi-turn chat failed", e)
-                _chatUiState.value = AiChatUiState.Error(
-                    e.localizedMessage ?: "Falha ao conversar com o Gemini."
-                )
+                _chatUiState.value = AiChatUiState.Idle
+                finalReply
             }
+        } catch (e: TimeoutCancellationException) {
+            Log.e(TAG, "Gemini multi-turn chat timed out", e)
+            _chatUiState.value = AiChatUiState.Error(
+                "Tempo limite de 60s atingido na resposta do chat. Tente novamente."
+            )
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Gemini multi-turn chat failed", e)
+            _chatUiState.value = AiChatUiState.Error(
+                e.localizedMessage ?: "Falha ao conversar com o Gemini."
+            )
+            null
         }
     }
 
