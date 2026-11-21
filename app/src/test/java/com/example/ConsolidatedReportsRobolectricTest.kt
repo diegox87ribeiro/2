@@ -699,6 +699,46 @@ class ConsolidatedReportsRobolectricTest {
         composeRule.onNodeWithTag("ai_transcribe_audio_button").assertExists()
         composeRule.onNodeWithTag("ai_voice_conversation_button").assertExists()
     }
+
+    @Test
+    fun `live lookup panel separates Investidor10 Data-Com day 30 G4 from Yahoo Data-Ex day 03 for SMRE11`() {
+        val smreQuote = com.example.domain.model.LiveMarketQuote(
+            ticker = "SMRE11",
+            companyName = "Smart Real Estate FII",
+            price = 56.30,
+            changePercent1d = 0.45,
+            lastDividendBrl = 1.00,
+            dataComDay = 30,
+            dataExDay = 3,
+            paymentDay = 16,
+            primarySourceLabel = "Yahoo Finance (B3 .SA) + Investidor10",
+            consultedSources = listOf("Yahoo Finance (B3 .SA)", "Investidor10"),
+            fetchedAtMillis = 1_763_650_000_000L,
+            marketTimestampLabel = "21/11 07:00",
+            b3PageUrl = "https://www.b3.com.br/",
+            advfnPageUrl = "https://br.advfn.com/",
+            investidor10PageUrl = "https://investidor10.com.br/fiis/smre11/"
+        )
+
+        composeRule.setContent {
+            InvestAiTheme {
+                com.example.ui.components.LiveMarketLookupPanel(
+                    lookupState = com.example.domain.model.LiveQuoteLookupState.Success(smreQuote),
+                    quickTickers = listOf("SMRE11"),
+                    ownedTickers = setOf("SMRE11"),
+                    onQueryTicker = {},
+                    onApplyPriceToPortfolio = {}
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Data-Com (Investidor10)").assertExists()
+        composeRule.onNodeWithText("Dia 30 (Grupo G4)").assertExists()
+        composeRule.onNodeWithText("Data-Ex (Yahoo)").assertExists()
+        composeRule.onNodeWithText("Dia 3").assertExists()
+        composeRule.onNodeWithTag("live_quote_datacom_vs_dataex_note").assertExists()
+        composeRule.onNodeWithTag("open_investidor10_button").assertExists()
+    }
 }
 
 

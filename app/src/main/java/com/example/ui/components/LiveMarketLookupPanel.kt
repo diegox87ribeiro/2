@@ -49,6 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
+import com.example.domain.model.DataComGroup
 import com.example.domain.model.LiveMarketQuote
 import com.example.domain.model.LiveQuoteLookupState
 import com.example.ui.theme.AmberGold
@@ -266,7 +267,13 @@ fun LiveMarketLookupPanel(
                     ptBr = ptBr,
                     onApplyToPortfolio = { onApplyPriceToPortfolio(lookupState.quote.ticker) },
                     onOpenB3 = { uriHandler.openUri(lookupState.quote.b3PageUrl) },
-                    onOpenAdvfn = { uriHandler.openUri(lookupState.quote.advfnPageUrl) }
+                    onOpenAdvfn = { uriHandler.openUri(lookupState.quote.advfnPageUrl) },
+                    onOpenInvestidor10 = {
+                        val invUrl = lookupState.quote.investidor10PageUrl.ifBlank {
+                            "https://investidor10.com.br/fiis/${lookupState.quote.ticker.lowercase(Locale.ROOT)}/"
+                        }
+                        uriHandler.openUri(invUrl)
+                    }
                 )
             }
         }
@@ -281,7 +288,8 @@ private fun LiveQuoteResultDetails(
     ptBr: Locale,
     onApplyToPortfolio: () -> Unit,
     onOpenB3: () -> Unit,
-    onOpenAdvfn: () -> Unit
+    onOpenAdvfn: () -> Unit,
+    onOpenInvestidor10: () -> Unit
 ) {
     Surface(
         shape = RoundedCornerShape(12.dp),
@@ -325,10 +333,18 @@ private fun LiveQuoteResultDetails(
                 if (quote.dayLow != null && quote.dayHigh != null) {
                     add("Mín / Máx Dia" to "${formatBrl(quote.dayLow)} – ${formatBrl(quote.dayHigh)}")
                 }
-                quote.dividendYield12m?.let { add("DY (12m)" to formatPct(it, false)) }
-                quote.priceToBook?.let { add("P/VP" to String.format(ptBr, "%.2fx", it)) }
+                quote.dividendYield12m?.takeIf { it in 0.01..80.0 }?.let { add("DY (12m)" to formatPct(it, false)) }
+                quote.priceToBook?.takeIf { it in 0.05..30.0 }?.let { add("P/VP" to String.format(ptBr, "%.2fx", it)) }
                 quote.lastDividendBrl?.let { add("Últ. Provento" to formatBrl(it)) }
-                quote.dataComDay?.let { add("Data-Com" to "Dia $it") }
+                quote.dataComDay?.let { day ->
+                    val grp = DataComGroup.fromDay(day)
+                    val label = if (grp != null) "Dia $day (Grupo ${grp.code})" else "Dia $day"
+                    add("Data-Com (Investidor10)" to label)
+                }
+                quote.dataExDay?.let { exDay ->
+                    add("Data-Ex (Yahoo)" to "Dia $exDay")
+                }
+                quote.paymentDay?.let { add("Pagamento" to "Dia $it") }
                 quote.dailyVolumeBrlMillions?.let {
                     add("Volume Dia" to "R$ ${String.format(ptBr, "%.1f", it)}M")
                 }
@@ -338,7 +354,7 @@ private fun LiveQuoteResultDetails(
                 if (quote.supportPrice != null && quote.resistancePrice != null) {
                     add("Suporte / Resist." to "${formatBrl(quote.supportPrice)} / ${formatBrl(quote.resistancePrice)}")
                 }
-                quote.priceToEarnings?.let { add("P/L" to String.format(ptBr, "%.2fx", it)) }
+                quote.priceToEarnings?.takeIf { it in 0.1..500.0 }?.let { add("P/L" to String.format(ptBr, "%.2fx", it)) }
                 if (quote.low52w != null && quote.high52w != null) {
                     add("52 Semanas" to "${formatBrl(quote.low52w)} – ${formatBrl(quote.high52w)}")
                 }
@@ -354,6 +370,24 @@ private fun LiveQuoteResultDetails(
                     }
                     if (pair.size == 1) Spacer(Modifier.weight(1f))
                 }
+            }
+
+            if (quote.dataExDay != null) {
+                val dataComDay = quote.dataComDay
+                val dataComGroup = DataComGroup.fromDay(dataComDay)
+                val noteText = if (dataComDay != null && dataComGroup != null) {
+                    "Regra B3: a Data-Com (Dia $dataComDay • Grupo ${dataComGroup.code}, Investidor10) define o direito ao dividendo e o grupo no app. " +
+                        "A Data-Ex (Dia ${quote.dataExDay}, Yahoo Finance) é o primeiro pregão seguinte sem direito ao provento."
+                } else {
+                    "Nota: o Yahoo Finance informa apenas a Data-Ex (Dia ${quote.dataExDay}, primeiro pregão sem direito ao dividendo), " +
+                        "que não é usada para classificar o grupo Data-Com (G1–G4). Confira a Data-Com oficial no Investidor10 ou no cadastro do ativo."
+                }
+                Text(
+                    text = noteText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ElectricCyan,
+                    modifier = Modifier.testTag("live_quote_datacom_vs_dataex_note")
+                )
             }
 
             FlowRow(
@@ -375,6 +409,14 @@ private fun LiveQuoteResultDetails(
                     Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("Site ADVFN")
+                }
+                OutlinedButton(
+                    onClick = onOpenInvestidor10,
+                    modifier = Modifier.heightIn(min = 48.dp).testTag("open_investidor10_button")
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Investidor10")
                 }
                 if (isOwnedInPortfolio) {
                     Button(

@@ -77,25 +77,40 @@ class PortfolioRepository(
     val priceTargetAlertsFlow: Flow<List<PriceTargetAlertEntity>> = alertDao.observeAll()
     val cachedLiveQuotesFlow: Flow<Map<String, LiveMarketQuote>> = cachedQuoteDao.observeAll().map { entities ->
         entities.associate { e ->
-            e.ticker.uppercase() to LiveMarketQuote(
-                ticker = e.ticker.uppercase(),
+            val upper = e.ticker.uppercase()
+            val inferred = LiveQuoteParsers.inferAssetClassFromTicker(upper)
+            val pathSegment = when (inferred) {
+                AssetClass.FII -> "fiis"
+                AssetClass.FIAGRO -> "fiagros"
+                AssetClass.ETF -> "etfs"
+                else -> "acoes"
+            }
+            val trustedDataComSource = e.primarySourceLabel.contains("Investidor10", ignoreCase = true) ||
+                e.primarySourceLabel.contains("Brapi", ignoreCase = true) ||
+                e.primarySourceLabel.contains("B3", ignoreCase = true)
+            val sanitizedDataCom = e.dataComDay?.takeIf { day ->
+                day in 1..31 && (trustedDataComSource || day !in 1..3)
+            }
+            upper to LiveMarketQuote(
+                ticker = upper,
                 companyName = e.companyName,
                 price = e.price,
                 changePercent1d = e.changePercent1d,
                 dailyVolumeBrlMillions = e.dailyVolumeBrlMillions,
-                priceToEarnings = e.pl,
-                priceToBook = e.pvp,
-                dividendYield12m = e.dy12m,
-                roePercent = e.roe,
+                priceToEarnings = e.pl?.takeIf { it in 0.1..500.0 },
+                priceToBook = e.pvp?.takeIf { it in 0.05..30.0 },
+                dividendYield12m = e.dy12m?.takeIf { it in 0.01..80.0 },
+                roePercent = e.roe?.takeIf { it in -200.0..200.0 },
                 lastDividendBrl = e.lastDividendBrl,
-                dataComDay = e.dataComDay,
+                dataComDay = sanitizedDataCom,
                 paymentDay = e.paymentDay,
                 primarySourceLabel = "${e.primarySourceLabel} (Cache Room)",
                 consultedSources = listOf("Cache Room"),
                 fetchedAtMillis = e.fetchedAtMillis,
                 marketTimestampLabel = e.marketTimestampLabel,
                 b3PageUrl = "https://www.b3.com.br/pt_br/market-data-e-indices/servicos-de-dados/market-data/cotacoes/cotacoes/",
-                advfnPageUrl = "https://br.advfn.com/p.php?pid=qkquote&symbol=BOV%3A${e.ticker.uppercase()}"
+                advfnPageUrl = "https://br.advfn.com/p.php?pid=qkquote&symbol=BOV%3A$upper",
+                investidor10PageUrl = "https://investidor10.com.br/$pathSegment/${upper.lowercase()}/"
             )
         }
     }
@@ -600,14 +615,14 @@ class PortfolioRepository(
                 companyName = q.companyName,
                 price = q.price,
                 changePercent1d = q.changePercent1d,
-                dy12m = q.dividendYield12m,
-                pvp = q.priceToBook,
-                pl = q.priceToEarnings,
-                roe = q.roePercent,
+                dy12m = q.dividendYield12m?.takeIf { it in 0.01..80.0 },
+                pvp = q.priceToBook?.takeIf { it in 0.05..30.0 },
+                pl = q.priceToEarnings?.takeIf { it in 0.1..500.0 },
+                roe = q.roePercent?.takeIf { it in -200.0..200.0 },
                 dailyVolumeBrlMillions = q.dailyVolumeBrlMillions,
                 lastDividendBrl = q.lastDividendBrl,
-                dataComDay = q.dataComDay,
-                paymentDay = q.paymentDay,
+                dataComDay = q.dataComDay?.takeIf { it in 1..31 },
+                paymentDay = q.paymentDay?.takeIf { it in 1..31 },
                 primarySourceLabel = q.primarySourceLabel,
                 marketTimestampLabel = q.marketTimestampLabel,
                 fetchedAtMillis = q.fetchedAtMillis

@@ -206,13 +206,13 @@ class MarketAndProfitParsersRobolectricTest {
     }
 
     @Test
-    fun `parsers block PVP card bleed like 59360,38 and avoid bogus Yahoo G1 Data-Com for FIIs`() {
+    fun `parsers block PVP card bleed like 59360,38 and separate Yahoo Data-Ex day 03 from Investidor10 Data-Com day 30`() {
         val corruptedInv10Html = """
             <div class="_card"><span class="title">Cotação</span><div class="_card-body"><span class="value">R$ 56,30</span></div></div>
             <div class="_card"><span class="title">P/VP</span><div class="_card-body"><span class="value">-</span></div></div>
             <div class="_card"><span class="title">Liquidez Diária</span><div class="_card-body"><span class="value">59.360,38</span></div></div>
             <table>
-              <tr><td><span>Dividendos</span></td><td><span>30/10/2026</span></td><td><span>16/11/2026</span></td><td><span>R$ 1,00</span></td></tr>
+              <tr><td><span>Rendimento</span></td><td><span>30/10/2026</span></td><td><span>16/11/2026</span></td><td><span>1,00</span></td></tr>
             </table>
         """.trimIndent()
         val parsedInv10 = LiveQuoteParsers.parseInvestidor10Html("SMRE11", corruptedInv10Html)!!
@@ -222,6 +222,8 @@ class MarketAndProfitParsersRobolectricTest {
         assertEquals(16, parsedInv10.paymentDay)
         assertEquals(1.00, parsedInv10.lastDividendBrl!!, 0.001)
 
+        // 03/11/2025 12:00 UTC == 03/11/2025 09:00 America/Sao_Paulo (Data-Ex dia 03)
+        val exDay03EpochSec = 1762171200L
         val yahooSingleDivFii = """
             {
               "chart": {
@@ -234,7 +236,7 @@ class MarketAndProfitParsersRobolectricTest {
                   "indicators": { "quote": [{ "close": [56.0, 56.10, 56.30] }] },
                   "events": {
                     "dividends": {
-                      "1762128000": { "amount": 1.00, "date": 1762128000 }
+                      "$exDay03EpochSec": { "amount": 1.00, "date": $exDay03EpochSec }
                     }
                   }
                 }]
@@ -244,6 +246,7 @@ class MarketAndProfitParsersRobolectricTest {
         val parsedYahoo = LiveQuoteParsers.parseYahooChartJson("SMRE11", yahooSingleDivFii)!!
         assertEquals(56.30, parsedYahoo.price!!, 0.001)
         org.junit.Assert.assertNull(parsedYahoo.dataComDay)
+        assertEquals(3, parsedYahoo.dataExDay)
         org.junit.Assert.assertNull(parsedYahoo.dividendYield12m)
 
         val badQuote = com.example.domain.model.LiveMarketQuote(
@@ -253,14 +256,19 @@ class MarketAndProfitParsersRobolectricTest {
             changePercent1d = 0.35,
             priceToBook = 59360.38,
             dividendYield12m = 1.78,
-            primarySourceLabel = "Yahoo Finance",
-            consultedSources = listOf("Yahoo Finance"),
+            dataComDay = 30,
+            dataExDay = 3,
+            primarySourceLabel = "Yahoo Finance + Investidor10",
+            consultedSources = listOf("Yahoo Finance", "Investidor10"),
             fetchedAtMillis = 1_763_650_000_000L,
             marketTimestampLabel = "20/11/2026 15:59",
             b3PageUrl = "https://www.b3.com.br",
-            advfnPageUrl = "https://br.advfn.com"
+            advfnPageUrl = "https://br.advfn.com",
+            investidor10PageUrl = "https://investidor10.com.br/fiis/smre11/"
         )
         val mergedNew = com.example.data.repository.LiveMarketDataRepository.mergeLiveQuoteIntoMarketAsset(null, badQuote)
         assertEquals(0.0, mergedNew.pvp, 0.001)
+        assertEquals(30, mergedNew.dataComDay)
+        assertEquals(com.example.domain.model.DataComGroup.G4, mergedNew.dataComGroup)
     }
 }

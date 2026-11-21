@@ -51,13 +51,15 @@ data class LiveMarketQuote(
     val dividendHistory6m: List<Double> = emptyList(),
     val dividendConsistencyMonths: Int? = null,
     val dataComDay: Int? = null,
+    val dataExDay: Int? = null,
     val paymentDay: Int? = null,
     val primarySourceLabel: String,
     val consultedSources: List<String>,
     val fetchedAtMillis: Long,
     val marketTimestampLabel: String,
     val b3PageUrl: String,
-    val advfnPageUrl: String
+    val advfnPageUrl: String,
+    val investidor10PageUrl: String = ""
 )
 
 sealed interface LiveQuoteLookupState {

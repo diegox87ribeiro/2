@@ -47,6 +47,7 @@ data class PartialQuoteResult(
     val dividendHistory6m: List<Double> = emptyList(),
     val dividendConsistencyMonths: Int? = null,
     val dataComDay: Int? = null,
+    val dataExDay: Int? = null,
     val paymentDay: Int? = null,
     val marketTimestampLabel: String? = null
 )
@@ -215,10 +216,15 @@ object LiveQuoteParsers {
                 null
             }
 
-            // Yahoo Finance para tickers .SA frequentemente reporta a data ex-dividendo deslocada
-            // para o início do mês seguinte (ex.: dia 1-3 = G1 em FIIs de final de mês G4).
-            // Por isso, deixamos dataComDay = null aqui para priorizar a tabela "Data com" oficial
-            // (Investidor10) ou o dia cadastrado pelo próprio usuário.
+            // Yahoo Finance para tickers .SA publica a DATA-EX (primeiro pregão sem direito ao dividendo,
+            // ex.: SMRE11 dia 03 do mês seguinte após feriado/fim de semana), e NÃO a Data-Com oficial (dia 30).
+            // Portanto registramos explicitamente em dataExDay e mantemos dataComDay = null.
+            val yahooDataExDay = sortedDivsDesc.firstOrNull()?.first?.let { exSec ->
+                Calendar.getInstance(spTz).apply { timeInMillis = exSec * 1000L }
+                    .get(Calendar.DAY_OF_MONTH)
+                    .takeIf { it in 1..31 }
+            }
+
             PartialQuoteResult(
                 sourceName = MarketQuoteProvider.YAHOO_B3.displayName,
                 ticker = ticker,
@@ -240,6 +246,7 @@ object LiveQuoteParsers {
                 dividendHistory6m = history6m,
                 dividendConsistencyMonths = distinctMonths,
                 dataComDay = null,
+                dataExDay = yahooDataExDay,
                 marketTimestampLabel = formattedTime
             )
         }.getOrNull()
@@ -357,12 +364,13 @@ object LiveQuoteParsers {
                 valuePattern = """([+-]?[0-9.,]+)\s*%"""
             )?.takeIf { it in -200.0..200.0 }
 
-            // Tabela de Proventos: Tipo | Data com | Pagamento | Valor (tolera tags inline dentro do <td>)
+            // Tabela de Proventos do Investidor10: Tipo | Data com | Pagamento | Valor
+            // Tolera tags inline (<span>/<a>) e valores com ou sem prefixo "R$".
             val divRowRegex = Regex(
-                """(?:Dividendos|Rendimentos|JCP|Amortiza[cç][aã]o)\s*(?:<[^>]+>\s*)*</t[dh]>\s*""" +
+                """(?:Dividendos?|Rendimentos?|Proventos?|JCP|JSCP|Juros[^<]{0,28}|Amortiza[cç][aã]o)\s*(?:<[^>]+>\s*)*</t[dh]>\s*""" +
                     """<t[dh][^>]*>(?:\s*<[^>]+>)*\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4})\s*(?:<[^>]+>\s*)*</t[dh]>\s*""" +
                     """<t[dh][^>]*>(?:\s*<[^>]+>)*\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4})\s*(?:<[^>]+>\s*)*</t[dh]>\s*""" +
-                    """<t[dh][^>]*>(?:\s*<[^>]+>)*\s*R\$\s*([0-9.,]+)""",
+                    """<t[dh][^>]*>(?:\s*<[^>]+>)*\s*(?:R\$\s*)?([0-9]+,[0-9]{2,6}|[0-9]+\.[0-9]{2,6})""",
                 RegexOption.IGNORE_CASE
             )
             val divMatches = divRowRegex.findAll(cleanHtml).toList()
@@ -516,16 +524,21 @@ class LiveMarketDataRepository(
                 val consulted = partials.map { it.sourceName }.distinct()
                 val company = partials.firstNotNullOfOrNull { it.companyName } ?: ticker
 
-                // Prioriza dados de proventos reais (Investidor10 / Yahoo events=div / Brapi)
+                // Prioriza dados de proventos reais (Investidor10 para Data-Com oficial; Yahoo Finance apenas para Data-Ex)
                 val divOrdered = listOfNotNull(inv10Res, yahooRes, brapiRes)
                 val bestLastDividend = divOrdered.firstNotNullOfOrNull { it.lastDividendBrl }
                 val bestDivHistory = divOrdered.firstOrNull { it.dividendHistory6m.isNotEmpty() }?.dividendHistory6m.orEmpty()
                 val bestDivConsistency = divOrdered.firstNotNullOfOrNull { it.dividendConsistencyMonths }
-                val bestDataComDay = divOrdered.firstNotNullOfOrNull { it.dataComDay }
+                val bestDataComDay = listOfNotNull(inv10Res, brapiRes).firstNotNullOfOrNull { it.dataComDay }
+                val bestDataExDay = yahooRes?.dataExDay
                 val bestPaymentDay = divOrdered.firstNotNullOfOrNull { it.paymentDay }
-                val bestDy12m = inv10Res?.dividendYield12m
+                val bestDy12m = (inv10Res?.dividendYield12m
                     ?: brapiRes?.dividendYield12m
-                    ?: yahooRes?.dividendYield12m
+                    ?: yahooRes?.dividendYield12m)?.takeIf { it in 0.01..80.0 }
+                val bestPvp = partials.firstNotNullOfOrNull { it.priceToBook }?.takeIf { it in 0.05..30.0 }
+                val bestPl = partials.firstNotNullOfOrNull { it.priceToEarnings }?.takeIf { it in 0.1..500.0 }
+                val bestRoe = partials.firstNotNullOfOrNull { it.roePercent }?.takeIf { it in -200.0..200.0 }
+                val inv10Url = buildInvestidor10Url(ticker)
 
                 Result.success(
                     LiveMarketQuote(
@@ -551,22 +564,24 @@ class LiveMarketDataRepository(
                         rsi14 = rsi14,
                         supportPrice = support,
                         resistancePrice = resistance,
-                        priceToEarnings = partials.firstNotNullOfOrNull { it.priceToEarnings },
-                        priceToBook = partials.firstNotNullOfOrNull { it.priceToBook },
+                        priceToEarnings = bestPl,
+                        priceToBook = bestPvp,
                         dividendYield12m = bestDy12m,
-                        roePercent = partials.firstNotNullOfOrNull { it.roePercent },
+                        roePercent = bestRoe,
                         marketCapBrl = partials.firstNotNullOfOrNull { it.marketCapBrl },
                         lastDividendBrl = bestLastDividend,
                         dividendHistory6m = bestDivHistory,
                         dividendConsistencyMonths = bestDivConsistency,
                         dataComDay = bestDataComDay,
+                        dataExDay = bestDataExDay,
                         paymentDay = bestPaymentDay,
                         primarySourceLabel = consulted.joinToString(" + "),
                         consultedSources = consulted,
                         fetchedAtMillis = nowMillis,
                         marketTimestampLabel = partials.firstNotNullOfOrNull { it.marketTimestampLabel } ?: timeFmt,
                         b3PageUrl = "https://www.b3.com.br/pt_br/market-data-e-indices/servicos-de-dados/market-data/cotacoes/cotacoes/",
-                        advfnPageUrl = "https://br.advfn.com/p.php?pid=qkquote&symbol=BOV%3A$ticker"
+                        advfnPageUrl = "https://br.advfn.com/p.php?pid=qkquote&symbol=BOV%3A$ticker",
+                        investidor10PageUrl = inv10Url
                     )
                 )
             }
@@ -620,6 +635,12 @@ class LiveMarketDataRepository(
     }
 
     private fun fetchFromInvestidor10(ticker: String): PartialQuoteResult? {
+        val url = buildInvestidor10Url(ticker)
+        val body = executeGet(url, acceptHeader = "text/html,application/xhtml+xml,*/*") ?: return null
+        return LiveQuoteParsers.parseInvestidor10Html(ticker, body)
+    }
+
+    private fun buildInvestidor10Url(ticker: String): String {
         val inferred = LiveQuoteParsers.inferAssetClassFromTicker(ticker)
         val pathSegment = when (inferred) {
             AssetClass.FII -> "fiis"
@@ -627,9 +648,7 @@ class LiveMarketDataRepository(
             AssetClass.ETF -> "etfs"
             else -> "acoes"
         }
-        val url = "https://investidor10.com.br/$pathSegment/${ticker.lowercase(Locale.ROOT)}/"
-        val body = executeGet(url, acceptHeader = "text/html,application/xhtml+xml,*/*") ?: return null
-        return LiveQuoteParsers.parseInvestidor10Html(ticker, body)
+        return "https://investidor10.com.br/$pathSegment/${ticker.lowercase(Locale.ROOT)}/"
     }
 
     private fun fetchFromAdvfn(ticker: String): PartialQuoteResult? {
