@@ -397,6 +397,7 @@ fun MultiTurnGeminiChatPanel(
                 OutlinedButton(
                     onClick = onToggleTranscribeAudio,
                     enabled = !isBusy && !isRecordingVoiceChat,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                     modifier = Modifier
                         .weight(1f)
                         .heightIn(min = 48.dp)
@@ -406,19 +407,23 @@ fun MultiTurnGeminiChatPanel(
                         imageVector = if (isRecordingTranscribe) Icons.Default.Stop else Icons.Default.Mic,
                         contentDescription = "Transcrever áudio pelo microfone",
                         tint = if (isRecordingTranscribe) CoralRed else ElectricCyan,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(16.dp)
                     )
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(5.dp))
                     Text(
-                        if (isRecordingTranscribe) "Parar e Transcrever" else "Transcrever Áudio",
+                        text = if (isRecordingTranscribe) "Parar Gravação" else "Transcrever",
                         style = MaterialTheme.typography.labelMedium,
-                        color = if (isRecordingTranscribe) CoralRed else ElectricCyan
+                        color = if (isRecordingTranscribe) CoralRed else ElectricCyan,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                 }
 
                 Button(
                     onClick = onToggleVoiceConversation,
                     enabled = !isBusy && !isRecordingTranscribe,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (isRecordingVoiceChat) CoralRed else VioletAccent,
                         contentColor = EmeraldOnPrimary
@@ -431,12 +436,15 @@ fun MultiTurnGeminiChatPanel(
                     Icon(
                         imageVector = if (isRecordingVoiceChat) Icons.Default.Stop else Icons.Default.RecordVoiceOver,
                         contentDescription = "Conversa por voz com o agente Gemini",
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(16.dp)
                     )
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(5.dp))
                     Text(
-                        if (isRecordingVoiceChat) "Enviar Voz" else "Conversa por Voz",
-                        style = MaterialTheme.typography.labelMedium
+                        text = if (isRecordingVoiceChat) "Enviar Voz" else "Voz com IA",
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                 }
             }

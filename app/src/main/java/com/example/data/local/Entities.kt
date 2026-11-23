@@ -148,3 +148,46 @@ data class CachedMarketQuoteEntity(
     val marketTimestampLabel: String,
     val fetchedAtMillis: Long
 )
+
+@Entity(tableName = "asset_swing_alerts")
+data class AssetSwingAlertEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val ticker: String,
+    val thresholdPercent: Double,
+    val direction: String = "ANY", // ANY, UP, DOWN
+    val isEnabled: Boolean = true,
+    val lastChangePercent: Double? = null,
+    val lastPriceBrl: Double? = null,
+    val lastEvaluatedAt: Long? = null,
+    val lastTriggeredAt: Long? = null,
+    val lastTriggeredDayKey: String = "",
+    val notes: String = "",
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "investment_goals")
+data class InvestmentGoalEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val goalType: String, // TOTAL_EQUITY, MONTHLY_DIVIDENDS, ASSET_POSITION_VALUE, ASSET_QUANTITY
+    val ticker: String = "",
+    val targetValue: Double,
+    val isEnabled: Boolean = true,
+    val hasTriggered: Boolean = false,
+    val triggeredAt: Long? = null,
+    val lastCurrentValue: Double = 0.0,
+    val notes: String = "",
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "alert_notification_history")
+data class AlertNotificationHistoryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val category: String, // SWING, GOAL, PRICE_TARGET
+    val ticker: String = "",
+    val title: String,
+    val message: String,
+    val deliveredAsPush: Boolean = true,
+    val createdAt: Long = System.currentTimeMillis()
+)
+

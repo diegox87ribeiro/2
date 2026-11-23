@@ -27,7 +27,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -84,6 +87,7 @@ import com.example.domain.model.OperationType
 import com.example.domain.model.OrderScreenshotRecognitionState
 import com.example.domain.model.PortfolioType
 import com.example.ui.screens.AiAgentsScreen
+import com.example.ui.screens.AlertsAndGoalsScreen
 import com.example.ui.screens.AssetClassExplorerScreen
 import com.example.ui.screens.AssetComparatorScreen
 import com.example.ui.screens.CryptoScreen
@@ -110,6 +114,7 @@ import com.example.ui.viewmodel.AiAgentsViewModel
 import com.example.ui.viewmodel.CloudReportsUiState
 import com.example.ui.viewmodel.InvestDashboardState
 import com.example.ui.viewmodel.InvestViewModel
+import com.example.ui.viewmodel.SmartAlertsUiState
 import kotlinx.coroutines.launch
 
 @Composable
@@ -126,6 +131,7 @@ fun InvestAppRoot(
 ) {
     val navController = rememberNavController()
     val state by viewModel.dashboardState.collectAsStateWithLifecycle()
+    val smartAlertsState by viewModel.smartAlertsState.collectAsStateWithLifecycle()
     val selectedPortfolioType by viewModel.selectedPortfolioType.collectAsStateWithLifecycle()
     val importFeedback by viewModel.importFeedback.collectAsStateWithLifecycle()
     val pendingImportPreview by viewModel.pendingImportPreview.collectAsStateWithLifecycle()
@@ -208,6 +214,7 @@ fun InvestAppRoot(
                     viewModel = viewModel,
                     aiAgentsViewModel = aiAgentsViewModel,
                     state = state,
+                    smartAlertsState = smartAlertsState,
                     selectedPortfolioType = selectedPortfolioType,
                     importFeedback = importFeedback,
                     pendingImportPreview = pendingImportPreview,
@@ -256,6 +263,7 @@ fun InvestAppRoot(
                     viewModel = viewModel,
                     aiAgentsViewModel = aiAgentsViewModel,
                     state = state,
+                    smartAlertsState = smartAlertsState,
                     selectedPortfolioType = selectedPortfolioType,
                     importFeedback = importFeedback,
                     pendingImportPreview = pendingImportPreview,
@@ -358,6 +366,7 @@ private fun MainScaffoldBody(
     viewModel: InvestViewModel,
     aiAgentsViewModel: AiAgentsViewModel,
     state: InvestDashboardState,
+    smartAlertsState: SmartAlertsUiState,
     selectedPortfolioType: PortfolioType,
     importFeedback: ImportParseResult?,
     pendingImportPreview: ImportParseResult?,
@@ -406,6 +415,32 @@ private fun MainScaffoldBody(
                     }
                 },
                 actions = {
+                    val activeAlertsBadgeCount = smartAlertsState.swingAlerts.count { it.isEnabled } +
+                        smartAlertsState.investmentGoals.count { it.isEnabled && !it.hasTriggered } +
+                        state.priceTargetAlerts.count { it.isEnabled && !it.hasTriggered }
+                    IconButton(
+                        onClick = { onNavigate(InvestRoutes.ROUTE_ALERTAS) },
+                        modifier = Modifier.size(48.dp).testTag("topbar_alerts_button")
+                    ) {
+                        BadgedBox(
+                            badge = {
+                                if (activeAlertsBadgeCount > 0) {
+                                    Badge(containerColor = EmeraldPrimary) {
+                                        Text(
+                                            text = if (activeAlertsBadgeCount > 9) "9+" else "$activeAlertsBadgeCount",
+                                            style = MaterialTheme.typography.labelSmall
+                                        )
+                                    }
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.NotificationsActive,
+                                contentDescription = "Abrir central de alertas e metas",
+                                tint = if (currentRoute == InvestRoutes.ROUTE_ALERTAS) EmeraldPrimary else TextSecondary
+                            )
+                        }
+                    }
                     Surface(shape = RoundedCornerShape(8.dp), color = EmeraldContainer.copy(alpha = 0.6f), modifier = Modifier.padding(end = 12.dp)) {
                         Text("SOMENTE ANÁLISE", style = MaterialTheme.typography.labelSmall, color = EmeraldPrimary, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
                     }
@@ -705,6 +740,29 @@ private fun MainScaffoldBody(
                         TaxDarfScreen(
                             state = state,
                             onSaveCarryLoss = viewModel::saveTaxCarryLoss
+                        )
+                    }
+                    composable(InvestRoutes.ROUTE_ALERTAS) {
+                        AlertsAndGoalsScreen(
+                            state = state,
+                            smartState = smartAlertsState,
+                            onCreateSwingAlert = viewModel::addSwingAlert,
+                            onToggleSwingAlert = viewModel::toggleSwingAlert,
+                            onResetSwingAlert = viewModel::resetSwingAlert,
+                            onDeleteSwingAlert = viewModel::deleteSwingAlert,
+                            onCreateInvestmentGoal = viewModel::addInvestmentGoal,
+                            onToggleInvestmentGoal = viewModel::toggleInvestmentGoal,
+                            onRearmInvestmentGoal = viewModel::rearmInvestmentGoal,
+                            onDeleteInvestmentGoal = viewModel::deleteInvestmentGoal,
+                            onCreatePriceAlert = viewModel::addPriceTargetAlert,
+                            onTogglePriceAlert = viewModel::togglePriceTargetAlert,
+                            onRearmPriceAlert = viewModel::rearmPriceTargetAlert,
+                            onDeletePriceAlert = viewModel::deletePriceTargetAlert,
+                            onCheckPriceAlertsNow = viewModel::checkPriceAlertsNow,
+                            onCheckAllSmartAlertsNow = viewModel::checkAllSmartAlertsNow,
+                            onSendTestNotification = viewModel::sendTestSmartNotification,
+                            onClearAlertHistory = viewModel::clearAlertHistory,
+                            onNotificationPermissionGranted = viewModel::onNotificationPermissionGranted
                         )
                     }
                 }

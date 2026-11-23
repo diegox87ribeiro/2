@@ -16,4 +16,13 @@
     <string name="dividend_alerts_title">Alertas de Data-Com e Data-Ex</string>
     <string name="dividend_alerts_check_now">Verificar Agora</string>
     <string name="dividend_alerts_test_push">Testar Alerta</string>
+    <string name="smart_alerts_screen_title">Alertas &amp; Metas</string>
+    <string name="smart_alerts_tab_swings">Variações Bruscas</string>
+    <string name="smart_alerts_tab_goals">Metas</string>
+    <string name="smart_alerts_tab_history">Histórico</string>
+    <string name="smart_alerts_check_all_cta">Verificar Agora</string>
+    <string name="smart_alerts_test_cta">Testar Push</string>
+    <string name="cd_open_alerts_center">Abrir central de alertas e metas</string>
+    <string name="cd_delete_swing_alert">Remover alerta de variação brusca</string>
+    <string name="cd_delete_investment_goal">Remover meta de investimento</string>
 </resources>

@@ -914,7 +914,132 @@ class ConsolidatedReportsRobolectricTest {
         org.junit.Assert.assertFalse(result.orders[3].selected)
         org.junit.Assert.assertTrue(result.warnings.isNotEmpty())
     }
+
+    @Test
+    fun `alerts and goals screen creates swing alert, investment goal, and dispatches local notifications via Room v9`() =
+        kotlinx.coroutines.runBlocking {
+            val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.app.Application>()
+            org.robolectric.Shadows.shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+
+            val db = androidx.room.Room.inMemoryDatabaseBuilder(
+                context,
+                com.example.data.local.InvestDatabase::class.java
+            ).allowMainThreadQueries().build()
+
+            try {
+                val smartDao = db.smartAlertDao()
+                val swingId = smartDao.insertSwingAlert(
+                    com.example.data.local.AssetSwingAlertEntity(
+                        ticker = "MTRE3",
+                        thresholdPercent = 5.0,
+                        direction = com.example.domain.model.SwingDirection.ANY.code,
+                        isEnabled = true,
+                        notes = "Monitorar volatilidade"
+                    )
+                )
+                val goalId = smartDao.insertInvestmentGoal(
+                    com.example.data.local.InvestmentGoalEntity(
+                        title = "Primeiros 100k",
+                        goalType = com.example.domain.model.InvestmentGoalType.TOTAL_EQUITY.code,
+                        targetValue = 100_000.0,
+                        isEnabled = true
+                    )
+                )
+                org.junit.Assert.assertEquals(1, smartDao.getActiveSwingAlerts().size)
+                org.junit.Assert.assertEquals(1, smartDao.getActiveInvestmentGoals().size)
+
+                val swingAlert = smartDao.getActiveSwingAlerts().first { it.id == swingId }
+                val goalEntity = smartDao.getActiveInvestmentGoals().first { it.id == goalId }
+
+                val swingPushSent = com.example.notifications.SmartAlertNotificationHelper.sendSharpSwingNotification(
+                    context = context,
+                    alert = swingAlert,
+                    changePercent1d = -6.45,
+                    currentPriceBrl = 4.12,
+                    sourceLabel = "B3 Oficial"
+                )
+                val goalPushSent = com.example.notifications.SmartAlertNotificationHelper.sendInvestmentGoalNotification(
+                    context = context,
+                    goal = goalEntity,
+                    currentValue = 102_500.0,
+                    targetValue = 100_000.0
+                )
+                org.junit.Assert.assertTrue(swingPushSent)
+                org.junit.Assert.assertTrue(goalPushSent)
+
+                smartDao.insertNotificationHistory(
+                    com.example.data.local.AlertNotificationHistoryEntity(
+                        category = "SWING",
+                        ticker = "MTRE3",
+                        title = "Queda brusca em MTRE3 (-6,45%)",
+                        message = "Oscilação atingiu gatilho de 5,0%",
+                        deliveredAsPush = true
+                    )
+                )
+                val nm = context.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+                val postedTitles = org.robolectric.Shadows.shadowOf(nm).allNotifications.map {
+                    it.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString().orEmpty()
+                }
+                org.junit.Assert.assertTrue(postedTitles.any { it.contains("MTRE3") })
+                org.junit.Assert.assertTrue(postedTitles.any { it.contains("Primeiros 100k") })
+            } finally {
+                db.close()
+            }
+
+            var createdSwingTicker = ""
+            var createdGoalTitle = ""
+            composeRule.setContent {
+                InvestAiTheme {
+                    com.example.ui.screens.AlertsAndGoalsScreen(
+                        state = com.example.ui.viewmodel.InvestDashboardState(),
+                        smartState = com.example.ui.viewmodel.SmartAlertsUiState(),
+                        onCreateSwingAlert = { ticker, _, _, _ -> createdSwingTicker = ticker },
+                        onToggleSwingAlert = { _, _ -> },
+                        onResetSwingAlert = {},
+                        onDeleteSwingAlert = {},
+                        onCreateInvestmentGoal = { title, _, _, _, _ -> createdGoalTitle = title },
+                        onToggleInvestmentGoal = { _, _ -> },
+                        onRearmInvestmentGoal = {},
+                        onDeleteInvestmentGoal = {},
+                        onCreatePriceAlert = { _, _, _, _ -> },
+                        onTogglePriceAlert = { _, _ -> },
+                        onRearmPriceAlert = {},
+                        onDeletePriceAlert = {},
+                        onCheckPriceAlertsNow = {},
+                        onCheckAllSmartAlertsNow = {},
+                        onSendTestNotification = {},
+                        onClearAlertHistory = {},
+                        onNotificationPermissionGranted = {}
+                    )
+                }
+            }
+
+            composeRule.onNodeWithTag("alerts_and_goals_lazy_column")
+                .performScrollToNode(hasTestTag("swing_ticker_input"))
+            composeRule.onNodeWithTag("swing_ticker_input").performTextInput("MTRE3")
+            composeRule.onNodeWithTag("alerts_and_goals_lazy_column")
+                .performScrollToNode(hasTestTag("create_swing_alert_button"))
+            composeRule.onNodeWithTag("create_swing_alert_button").performClick()
+            org.junit.Assert.assertEquals("MTRE3", createdSwingTicker)
+
+            composeRule.onNodeWithTag("alerts_and_goals_lazy_column")
+                .performScrollToNode(hasTestTag("smart_alerts_tab_goals"))
+            composeRule.onNodeWithTag("smart_alerts_tab_goals").performClick()
+            composeRule.waitForIdle()
+
+            composeRule.onNodeWithTag("alerts_and_goals_lazy_column")
+                .performScrollToNode(hasTestTag("goal_title_input"))
+            composeRule.onNodeWithTag("goal_title_input").performTextInput("Meta 100k")
+            composeRule.onNodeWithTag("alerts_and_goals_lazy_column")
+                .performScrollToNode(hasTestTag("goal_target_value_input"))
+            composeRule.onNodeWithTag("goal_target_value_input").performTextInput("100000")
+            composeRule.onNodeWithTag("alerts_and_goals_lazy_column")
+                .performScrollToNode(hasTestTag("create_investment_goal_button"))
+            composeRule.onNodeWithTag("create_investment_goal_button").performClick()
+            org.junit.Assert.assertEquals("Meta 100k", createdGoalTitle)
+        }
 }
+
 
 
 

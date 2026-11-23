@@ -8,10 +8,13 @@ import androidx.lifecycle.viewModelScope
 import com.example.ai.formatFirebaseAiError
 import com.example.data.importexport.ImportParseResult
 import com.example.data.importexport.SpreadsheetImporter
+import com.example.data.local.AlertNotificationHistoryEntity
 import com.example.data.local.AppPreferencesState
+import com.example.data.local.AssetSwingAlertEntity
 import com.example.data.local.CryptoVirtualPositionEntity
 import com.example.data.local.ImportHistoryEntity
 import com.example.data.local.InvestDatabase
+import com.example.data.local.InvestmentGoalEntity
 import com.example.data.local.PortfolioOperationEntity
 import com.example.data.local.PreferencesManager
 import com.example.data.local.PriceTargetAlertEntity
@@ -36,7 +39,9 @@ import com.example.domain.model.AssetClass
 import com.example.domain.model.BenchmarkSeries
 import com.example.domain.model.DividendDateAlertEvaluator
 import com.example.domain.model.DividendDateEventType
+import com.example.domain.model.DividendMonitorCalculator
 import com.example.domain.model.HhiRiskReport
+import com.example.domain.model.InvestmentGoalType
 import com.example.domain.model.LiveMarketQuote
 import com.example.domain.model.LiveQuoteLookupState
 import com.example.domain.model.MarketAsset
@@ -49,10 +54,14 @@ import com.example.domain.model.PriceTargetEvaluator
 import com.example.domain.model.ProfitChartConnectionState
 import com.example.domain.model.RecognizedOrderDraft
 import com.example.domain.model.SimulationScenarioResult
+import com.example.domain.model.SmartAlertEvaluator
+import com.example.domain.model.SwingDirection
 import com.example.notifications.DividendDateAlertWorkScheduler
 import com.example.notifications.DividendDateNotificationHelper
 import com.example.notifications.PriceAlertNotificationHelper
 import com.example.notifications.PriceAlertWorkScheduler
+import com.example.notifications.SmartAlertNotificationHelper
+import com.example.notifications.SmartAlertWorkScheduler
 import com.google.firebase.FirebaseApp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -96,6 +105,13 @@ data class InvestDashboardState(
     val isCheckingPriceAlerts: Boolean = false
 )
 
+data class SmartAlertsUiState(
+    val swingAlerts: List<AssetSwingAlertEntity> = emptyList(),
+    val investmentGoals: List<InvestmentGoalEntity> = emptyList(),
+    val history: List<AlertNotificationHistoryEntity> = emptyList(),
+    val isCheckingSmartAlerts: Boolean = false
+)
+
 class InvestViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = InvestDatabase.getInstance(application)
@@ -114,6 +130,7 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
     private val _liveLookupState = MutableStateFlow<LiveQuoteLookupState>(LiveQuoteLookupState.Idle)
     private val _isLiveBatchRefreshing = MutableStateFlow(false)
     private val _isCheckingPriceAlerts = MutableStateFlow(false)
+    private val _isCheckingSmartAlerts = MutableStateFlow(false)
     private val _profitConnectionState = MutableStateFlow<ProfitChartConnectionState>(ProfitChartConnectionState.Disconnected)
     private var profitPollingJob: Job? = null
 
@@ -128,6 +145,24 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _statusBannerMessage = MutableStateFlow<String?>(null)
     val statusBannerMessage: StateFlow<String?> = _statusBannerMessage.asStateFlow()
+
+    val smartAlertsState: StateFlow<SmartAlertsUiState> = combine(
+        repository.swingAlertsFlow,
+        repository.investmentGoalsFlow,
+        repository.alertHistoryFlow,
+        _isCheckingSmartAlerts
+    ) { swings, goals, history, checking ->
+        SmartAlertsUiState(
+            swingAlerts = swings,
+            investmentGoals = goals,
+            history = history,
+            isCheckingSmartAlerts = checking
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = SmartAlertsUiState()
+    )
 
     private val mergedLiveQuotesFlow = combine(
         repository.cachedLiveQuotesFlow,
@@ -279,6 +314,16 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                 .distinctUntilChanged()
                 .collect { shouldSchedule ->
                     DividendDateAlertWorkScheduler.syncSchedule(getApplication(), shouldSchedule)
+                }
+        }
+        viewModelScope.launch {
+            combine(
+                repository.swingAlertsFlow.map { list -> list.any { it.isEnabled } },
+                repository.investmentGoalsFlow.map { list -> list.any { it.isEnabled && !it.hasTriggered } }
+            ) { hasSwings, hasGoals -> hasSwings || hasGoals }
+                .distinctUntilChanged()
+                .collect { hasActive ->
+                    SmartAlertWorkScheduler.syncSchedule(getApplication(), hasActive)
                 }
         }
     }
@@ -943,7 +988,13 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         notifyIfNoneTriggered: Boolean
     ) {
         val activeAlerts = withContext(Dispatchers.IO) { repository.getActivePriceTargetAlerts() }
-        if (activeAlerts.isEmpty()) return
+        if (activeAlerts.isEmpty()) {
+            val triggeredSwings = evaluateSharpSwingsAgainstQuotes(quotes)
+            if (triggeredSwings.isNotEmpty()) {
+                _statusBannerMessage.value = "Variação brusca detectada: ${triggeredSwings.joinToString(", ")}."
+            }
+            return
+        }
 
         val now = System.currentTimeMillis()
         val triggeredList = mutableListOf<String>()
@@ -968,6 +1019,18 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
                 if (!delivered) pendingPushCount++
+                withContext(Dispatchers.IO) {
+                    repository.insertNotificationHistory(
+                        AlertNotificationHistoryEntity(
+                            category = "PRICE_TARGET",
+                            ticker = key,
+                            title = "Meta de preço atingida: $key",
+                            message = "$key chegou a R$ ${"%.2f".format(quote.price)} (alvo R$ ${"%.2f".format(alert.targetPriceBrl)}).",
+                            deliveredAsPush = delivered,
+                            createdAt = now
+                        )
+                    )
+                }
                 triggeredList.add("$key a R$ ${"%.2f".format(quote.price)}")
             } else {
                 withContext(Dispatchers.IO) {
@@ -979,6 +1042,11 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
             }
+        }
+
+        val triggeredSwings = evaluateSharpSwingsAgainstQuotes(quotes)
+        if (triggeredSwings.isNotEmpty() && triggeredList.isEmpty()) {
+            _statusBannerMessage.value = "Variação brusca detectada: ${triggeredSwings.joinToString(", ")}."
         }
 
         if (triggeredList.isNotEmpty()) {
@@ -1188,5 +1256,346 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
 
     fun dismissOrderScreenshotReview() {
         _orderScreenshotState.value = OrderScreenshotRecognitionState.Idle
+    }
+
+    // --- Sistema de Notificações Locais: Variações Bruscas & Metas de Investimento ---
+
+    fun addSwingAlert(
+        rawTicker: String,
+        thresholdPercent: Double,
+        direction: SwingDirection,
+        notes: String
+    ) {
+        val ticker = LiveQuoteParsers.normalizeTicker(rawTicker)
+        if (ticker.length < 4 || thresholdPercent <= 0.0) {
+            _statusBannerMessage.value = "Informe um ticker válido (ex: PETR4, HGLG11) e um percentual acima de 0%."
+            return
+        }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                repository.insertSwingAlert(
+                    AssetSwingAlertEntity(
+                        ticker = ticker,
+                        thresholdPercent = thresholdPercent,
+                        direction = direction.code,
+                        isEnabled = true,
+                        notes = notes.trim()
+                    )
+                )
+            }
+            SmartAlertWorkScheduler.syncSchedule(getApplication(), hasActiveAlertsOrGoals = true)
+            _statusBannerMessage.value =
+                "Alerta de variação brusca criado para $ticker (${direction.shortSymbol}${"%.1f".format(thresholdPercent)}%)."
+
+            val existingLive = dashboardState.value.liveQuotesByTicker[ticker]
+            if (existingLive != null) {
+                evaluateSharpSwingsAgainstQuotes(mapOf(ticker to existingLive))
+            } else {
+                liveMarketRepository.fetchLiveQuote(ticker).onSuccess { quote ->
+                    _liveQuotesByTicker.value = _liveQuotesByTicker.value + (quote.ticker to quote)
+                    withContext(Dispatchers.IO) { repository.saveCachedLiveQuote(quote) }
+                    evaluateSharpSwingsAgainstQuotes(mapOf(quote.ticker.uppercase() to quote))
+                }
+            }
+        }
+    }
+
+    fun toggleSwingAlert(id: Long, enabled: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.setSwingAlertEnabled(id, enabled)
+        }
+    }
+
+    fun resetSwingAlert(id: Long) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                repository.resetSwingAlertCooldown(id)
+            }
+            _statusBannerMessage.value = "Alerta de variação rearmado para disparar novamente hoje."
+        }
+    }
+
+    fun deleteSwingAlert(id: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.deleteSwingAlert(id)
+        }
+    }
+
+    fun addInvestmentGoal(
+        title: String,
+        goalType: InvestmentGoalType,
+        rawTicker: String,
+        targetValue: Double,
+        notes: String
+    ) {
+        val cleanTicker = if (goalType.requiresTicker) LiveQuoteParsers.normalizeTicker(rawTicker) else ""
+        if (goalType.requiresTicker && cleanTicker.length < 4) {
+            _statusBannerMessage.value = "Informe um ticker válido para esta meta por ativo."
+            return
+        }
+        if (targetValue <= 0.0) {
+            _statusBannerMessage.value = "Informe um valor alvo maior que zero para a meta."
+            return
+        }
+        val resolvedTitle = title.trim().ifBlank {
+            if (cleanTicker.isNotBlank()) "${goalType.label} • $cleanTicker" else goalType.label
+        }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                repository.insertInvestmentGoal(
+                    InvestmentGoalEntity(
+                        title = resolvedTitle,
+                        goalType = goalType.code,
+                        ticker = cleanTicker,
+                        targetValue = targetValue,
+                        isEnabled = true,
+                        hasTriggered = false,
+                        notes = notes.trim()
+                    )
+                )
+            }
+            SmartAlertWorkScheduler.syncSchedule(getApplication(), hasActiveAlertsOrGoals = true)
+            _statusBannerMessage.value =
+                "Meta '$resolvedTitle' criada (${SmartAlertEvaluator.formatGoalValue(goalType, targetValue)})."
+            evaluateInvestmentGoalsNow(notifyIfNoneReached = false)
+        }
+    }
+
+    fun toggleInvestmentGoal(id: Long, enabled: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.setInvestmentGoalEnabled(id, enabled)
+        }
+    }
+
+    fun rearmInvestmentGoal(id: Long) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                repository.rearmInvestmentGoal(id)
+            }
+            _statusBannerMessage.value = "Meta reativada para monitoramento contínuo."
+        }
+    }
+
+    fun deleteInvestmentGoal(id: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.deleteInvestmentGoal(id)
+        }
+    }
+
+    fun clearAlertHistory() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                repository.clearNotificationHistory()
+            }
+            _statusBannerMessage.value = "Histórico de alertas locais limpo."
+        }
+    }
+
+    fun sendTestSmartNotification() {
+        viewModelScope.launch {
+            val st = dashboardState.value
+            val sampleTicker = st.realPositions.firstOrNull()?.ticker ?: "VALE3"
+            val sampleEquity = st.realHhi.totalEquityBrl
+            if (!SmartAlertNotificationHelper.hasNotificationPermission(getApplication())) {
+                _statusBannerMessage.value =
+                    "Ative a permissão de notificações do Android para receber alertas locais."
+                return@launch
+            }
+            val delivered = SmartAlertNotificationHelper.sendTestSmartNotification(
+                context = getApplication(),
+                sampleTicker = sampleTicker,
+                sampleEquityBrl = sampleEquity
+            )
+            if (delivered) {
+                withContext(Dispatchers.IO) {
+                    repository.insertNotificationHistory(
+                        AlertNotificationHistoryEntity(
+                            category = "GOAL",
+                            ticker = sampleTicker,
+                            title = "Notificação de Teste Enviada",
+                            message = "Teste local disparado com sucesso para variações bruscas ($sampleTicker) e metas da carteira.",
+                            deliveredAsPush = true
+                        )
+                    )
+                }
+                _statusBannerMessage.value = "Notificação local de teste enviada com sucesso!"
+            } else {
+                _statusBannerMessage.value = "Não foi possível enviar a notificação de teste. Verifique as permissões do Android."
+            }
+        }
+    }
+
+    fun checkAllSmartAlertsNow() {
+        if (_isCheckingSmartAlerts.value) return
+        viewModelScope.launch {
+            _isCheckingSmartAlerts.value = true
+            try {
+                val activeSwings = withContext(Dispatchers.IO) { repository.getActiveSwingAlerts() }
+                val activeGoals = withContext(Dispatchers.IO) { repository.getActiveInvestmentGoals() }
+                val activePrices = withContext(Dispatchers.IO) { repository.getActivePriceTargetAlerts() }
+
+                if (activeSwings.isEmpty() && activeGoals.isEmpty() && activePrices.isEmpty()) {
+                    _statusBannerMessage.value = "Nenhum alerta de variação, meta financeira ou preço alvo ativo."
+                    return@launch
+                }
+
+                val tickersToFetch = (activeSwings.map { it.ticker } + activePrices.map { it.ticker })
+                    .map(LiveQuoteParsers::normalizeTicker)
+                    .filter { it.length >= 4 }
+                    .distinct()
+
+                val fetchedQuotes = if (tickersToFetch.isNotEmpty()) {
+                    val fetched = liveMarketRepository.fetchBatchQuotes(tickersToFetch)
+                    if (fetched.isNotEmpty()) {
+                        _liveQuotesByTicker.value = _liveQuotesByTicker.value + fetched
+                        withContext(Dispatchers.IO) { repository.saveCachedLiveQuotes(fetched.values) }
+                    }
+                    fetched
+                } else {
+                    emptyMap()
+                }
+
+                val quotesPool = dashboardState.value.liveQuotesByTicker + fetchedQuotes
+                val triggeredSwings = if (quotesPool.isNotEmpty()) {
+                    evaluateSharpSwingsAgainstQuotes(quotesPool)
+                } else {
+                    emptyList()
+                }
+
+                if (fetchedQuotes.isNotEmpty() && activePrices.isNotEmpty()) {
+                    evaluateLiveQuotesAgainstAlerts(fetchedQuotes, notifyIfNoneTriggered = false)
+                }
+
+                val reachedGoals = evaluateInvestmentGoalsNow(notifyIfNoneReached = false)
+
+                val summaryParts = buildList {
+                    if (triggeredSwings.isNotEmpty()) add("${triggeredSwings.size} variação(ões) brusca(s)")
+                    if (reachedGoals.isNotEmpty()) add("${reachedGoals.size} meta(s) alcançada(s)")
+                }
+                _statusBannerMessage.value = if (summaryParts.isNotEmpty()) {
+                    "Alertas disparados: ${summaryParts.joinToString(" e ")}!"
+                } else {
+                    "Verificação concluída (${activeSwings.size} alerta(s) de variação e ${activeGoals.size} meta(s) monitorada(s)). Nenhum gatilho atingido agora."
+                }
+            } finally {
+                _isCheckingSmartAlerts.value = false
+            }
+        }
+    }
+
+    private suspend fun evaluateSharpSwingsAgainstQuotes(
+        quotes: Map<String, LiveMarketQuote>
+    ): List<String> {
+        val activeSwings = withContext(Dispatchers.IO) { repository.getActiveSwingAlerts() }
+        if (activeSwings.isEmpty()) return emptyList()
+
+        val now = System.currentTimeMillis()
+        val todayKey = SmartAlertEvaluator.todayDayKey(now)
+        val triggeredLabels = mutableListOf<String>()
+
+        activeSwings.forEach { alert ->
+            val key = alert.ticker.trim().uppercase()
+            val quote = quotes[key] ?: return@forEach
+            if (SmartAlertEvaluator.isSharpSwingTriggered(alert, quote.changePercent1d, todayKey)) {
+                val delivered = SmartAlertNotificationHelper.sendSharpSwingNotification(
+                    context = getApplication(),
+                    alert = alert,
+                    changePercent1d = quote.changePercent1d,
+                    currentPriceBrl = quote.price,
+                    sourceLabel = quote.primarySourceLabel
+                )
+                withContext(Dispatchers.IO) {
+                    repository.markSwingAlertTriggered(
+                        id = alert.id,
+                        changePercent = quote.changePercent1d,
+                        priceBrl = quote.price,
+                        triggeredAt = now,
+                        dayKey = todayKey
+                    )
+                    val signed = "%+.2f%%".format(quote.changePercent1d)
+                    val move = if (quote.changePercent1d >= 0.0) "Alta brusca" else "Queda brusca"
+                    repository.insertNotificationHistory(
+                        AlertNotificationHistoryEntity(
+                            category = "SWING",
+                            ticker = key,
+                            title = "$move em $key ($signed)",
+                            message = "$key variou $signed (cotação R$ ${"%.2f".format(quote.price)}) via ${quote.primarySourceLabel}.",
+                            deliveredAsPush = delivered,
+                            createdAt = now
+                        )
+                    )
+                }
+                triggeredLabels.add("$key (${"%+.2f%%".format(quote.changePercent1d)})")
+            } else {
+                withContext(Dispatchers.IO) {
+                    repository.updateSwingLastEvaluated(
+                        id = alert.id,
+                        changePercent = quote.changePercent1d,
+                        priceBrl = quote.price,
+                        evaluatedAt = now
+                    )
+                }
+            }
+        }
+        return triggeredLabels
+    }
+
+    private suspend fun evaluateInvestmentGoalsNow(notifyIfNoneReached: Boolean): List<String> {
+        val activeGoals = withContext(Dispatchers.IO) { repository.getActiveInvestmentGoals() }
+        if (activeGoals.isEmpty()) return emptyList()
+
+        val st = dashboardState.value
+        val totalEquity = st.realHhi.totalEquityBrl
+        val divSummary = DividendMonitorCalculator.compute(
+            realPositions = st.realPositions,
+            marketAssets = st.marketAssets,
+            operations = st.operations
+        )
+        val monthlyDiv = maxOf(divSummary.projectedMonthlyBrl, divSummary.receivedMonthlyBrl)
+        val now = System.currentTimeMillis()
+        val reachedNames = mutableListOf<String>()
+
+        activeGoals.forEach { goal ->
+            val snap = SmartAlertEvaluator.computeGoalProgress(
+                goal = goal,
+                totalEquityBrl = totalEquity,
+                estimatedMonthlyDividendsBrl = monthlyDiv,
+                realPositions = st.realPositions
+            )
+            if (snap.isReached) {
+                val delivered = SmartAlertNotificationHelper.sendInvestmentGoalNotification(
+                    context = getApplication(),
+                    goal = goal,
+                    currentValue = snap.currentValue,
+                    targetValue = snap.targetValue
+                )
+                withContext(Dispatchers.IO) {
+                    repository.markInvestmentGoalTriggered(goal.id, snap.currentValue, now)
+                    val gType = InvestmentGoalType.fromCode(goal.goalType)
+                    repository.insertNotificationHistory(
+                        AlertNotificationHistoryEntity(
+                            category = "GOAL",
+                            ticker = goal.ticker,
+                            title = "Meta alcançada: ${goal.title}",
+                            message = "${gType.label}: ${SmartAlertEvaluator.formatGoalValue(gType, snap.currentValue)} (alvo ${SmartAlertEvaluator.formatGoalValue(gType, snap.targetValue)}).",
+                            deliveredAsPush = delivered,
+                            createdAt = now
+                        )
+                    )
+                }
+                reachedNames.add(goal.title)
+            } else {
+                withContext(Dispatchers.IO) {
+                    repository.updateInvestmentGoalProgress(goal.id, snap.currentValue)
+                }
+            }
+        }
+
+        if (reachedNames.isNotEmpty()) {
+            _statusBannerMessage.value = "Meta(s) alcançada(s): ${reachedNames.joinToString(", ")}!"
+        } else if (notifyIfNoneReached) {
+            _statusBannerMessage.value = "Nenhuma meta de investimento alcançada ainda."
+        }
+        return reachedNames
     }
 }

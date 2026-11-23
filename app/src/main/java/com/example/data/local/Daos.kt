@@ -298,3 +298,125 @@ interface CachedMarketQuoteDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(quotes: List<CachedMarketQuoteEntity>)
 }
+
+@Dao
+interface SmartAlertDao {
+    // --- Variações Bruscas ---
+    @Query("SELECT * FROM asset_swing_alerts ORDER BY isEnabled DESC, createdAt DESC")
+    fun observeSwingAlerts(): Flow<List<AssetSwingAlertEntity>>
+
+    @Query("SELECT * FROM asset_swing_alerts WHERE isEnabled = 1")
+    suspend fun getActiveSwingAlerts(): List<AssetSwingAlertEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSwingAlert(alert: AssetSwingAlertEntity): Long
+
+    @Query("UPDATE asset_swing_alerts SET isEnabled = :enabled WHERE id = :id")
+    suspend fun setSwingAlertEnabled(id: Long, enabled: Boolean)
+
+    @Query(
+        """
+        UPDATE asset_swing_alerts
+        SET lastChangePercent = :changePercent,
+            lastPriceBrl = :priceBrl,
+            lastEvaluatedAt = :evaluatedAt
+        WHERE id = :id
+        """
+    )
+    suspend fun updateSwingLastEvaluated(
+        id: Long,
+        changePercent: Double,
+        priceBrl: Double,
+        evaluatedAt: Long
+    )
+
+    @Query(
+        """
+        UPDATE asset_swing_alerts
+        SET lastChangePercent = :changePercent,
+            lastPriceBrl = :priceBrl,
+            lastEvaluatedAt = :triggeredAt,
+            lastTriggeredAt = :triggeredAt,
+            lastTriggeredDayKey = :dayKey
+        WHERE id = :id
+        """
+    )
+    suspend fun markSwingTriggered(
+        id: Long,
+        changePercent: Double,
+        priceBrl: Double,
+        triggeredAt: Long,
+        dayKey: String
+    )
+
+    @Query(
+        """
+        UPDATE asset_swing_alerts
+        SET lastTriggeredDayKey = '',
+            isEnabled = 1
+        WHERE id = :id
+        """
+    )
+    suspend fun resetSwingCooldown(id: Long)
+
+    @Query("DELETE FROM asset_swing_alerts WHERE id = :id")
+    suspend fun deleteSwingAlertById(id: Long)
+
+    // --- Metas de Investimento ---
+    @Query("SELECT * FROM investment_goals ORDER BY hasTriggered ASC, createdAt DESC")
+    fun observeInvestmentGoals(): Flow<List<InvestmentGoalEntity>>
+
+    @Query("SELECT * FROM investment_goals WHERE isEnabled = 1 AND hasTriggered = 0")
+    suspend fun getActiveInvestmentGoals(): List<InvestmentGoalEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertInvestmentGoal(goal: InvestmentGoalEntity): Long
+
+    @Query("UPDATE investment_goals SET isEnabled = :enabled WHERE id = :id")
+    suspend fun setInvestmentGoalEnabled(id: Long, enabled: Boolean)
+
+    @Query(
+        """
+        UPDATE investment_goals
+        SET lastCurrentValue = :currentValue
+        WHERE id = :id
+        """
+    )
+    suspend fun updateGoalProgress(id: Long, currentValue: Double)
+
+    @Query(
+        """
+        UPDATE investment_goals
+        SET hasTriggered = 1,
+            triggeredAt = :triggeredAt,
+            lastCurrentValue = :currentValue
+        WHERE id = :id
+        """
+    )
+    suspend fun markGoalTriggered(id: Long, currentValue: Double, triggeredAt: Long)
+
+    @Query(
+        """
+        UPDATE investment_goals
+        SET hasTriggered = 0,
+            triggeredAt = NULL,
+            isEnabled = 1
+        WHERE id = :id
+        """
+    )
+    suspend fun rearmInvestmentGoal(id: Long)
+
+    @Query("DELETE FROM investment_goals WHERE id = :id")
+    suspend fun deleteInvestmentGoalById(id: Long)
+
+    // --- Histórico de Notificações Locais ---
+    @Query("SELECT * FROM alert_notification_history ORDER BY createdAt DESC LIMIT 80")
+    fun observeNotificationHistory(): Flow<List<AlertNotificationHistoryEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertNotificationHistory(entry: AlertNotificationHistoryEntity): Long
+
+    @Query("DELETE FROM alert_notification_history")
+    suspend fun clearNotificationHistory()
+}
+

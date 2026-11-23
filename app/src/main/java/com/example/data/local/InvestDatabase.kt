@@ -20,9 +20,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PriceTargetAlertEntity::class,
         CachedMarketQuoteEntity::class,
         Ativo::class,
-        Transacao::class
+        Transacao::class,
+        AssetSwingAlertEntity::class,
+        InvestmentGoalEntity::class,
+        AlertNotificationHistoryEntity::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class InvestDatabase : RoomDatabase() {
@@ -34,6 +37,7 @@ abstract class InvestDatabase : RoomDatabase() {
     abstract fun chatMessageDao(): ChatMessageDao
     abstract fun priceTargetAlertDao(): PriceTargetAlertDao
     abstract fun cachedMarketQuoteDao(): CachedMarketQuoteDao
+    abstract fun smartAlertDao(): SmartAlertDao
 
     companion object {
         @Volatile
@@ -228,6 +232,59 @@ abstract class InvestDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `asset_swing_alerts` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `ticker` TEXT NOT NULL,
+                        `thresholdPercent` REAL NOT NULL,
+                        `direction` TEXT NOT NULL,
+                        `isEnabled` INTEGER NOT NULL,
+                        `lastChangePercent` REAL,
+                        `lastPriceBrl` REAL,
+                        `lastEvaluatedAt` INTEGER,
+                        `lastTriggeredAt` INTEGER,
+                        `lastTriggeredDayKey` TEXT NOT NULL,
+                        `notes` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `investment_goals` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `goalType` TEXT NOT NULL,
+                        `ticker` TEXT NOT NULL,
+                        `targetValue` REAL NOT NULL,
+                        `isEnabled` INTEGER NOT NULL,
+                        `hasTriggered` INTEGER NOT NULL,
+                        `triggeredAt` INTEGER,
+                        `lastCurrentValue` REAL NOT NULL,
+                        `notes` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `alert_notification_history` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `category` TEXT NOT NULL,
+                        `ticker` TEXT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `message` TEXT NOT NULL,
+                        `deliveredAsPush` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getInstance(context: Context): InvestDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -242,7 +299,8 @@ abstract class InvestDatabase : RoomDatabase() {
                         MIGRATION_4_5,
                         MIGRATION_5_6,
                         MIGRATION_6_7,
-                        MIGRATION_7_8
+                        MIGRATION_7_8,
+                        MIGRATION_8_9
                     )
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()

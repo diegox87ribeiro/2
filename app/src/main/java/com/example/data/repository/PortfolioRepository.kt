@@ -5,7 +5,9 @@ import android.net.Uri
 import com.example.data.importexport.ImportParseResult
 import com.example.data.importexport.SpreadsheetImporter
 import com.example.data.local.AiRecommendationDao
+import com.example.data.local.AlertNotificationHistoryEntity
 import com.example.data.local.AppPreferencesState
+import com.example.data.local.AssetSwingAlertEntity
 import com.example.data.local.Ativo
 import com.example.data.local.AtivoComTransacoes
 import com.example.data.local.CachedMarketQuoteDao
@@ -15,6 +17,7 @@ import com.example.data.local.CryptoVirtualDao
 import com.example.data.local.CryptoVirtualPositionEntity
 import com.example.data.local.ImportHistoryEntity
 import com.example.data.local.InvestDatabase
+import com.example.data.local.InvestmentGoalEntity
 import com.example.data.local.PortfolioDao
 import com.example.data.local.PortfolioOperationEntity
 import com.example.data.local.PortfolioPositionEntity
@@ -22,6 +25,7 @@ import com.example.data.local.PreferencesManager
 import com.example.data.local.PriceTargetAlertDao
 import com.example.data.local.PriceTargetAlertEntity
 import com.example.data.local.SavedAiRecommendationEntity
+import com.example.data.local.SmartAlertDao
 import com.example.data.local.StrategyChangeLogEntity
 import com.example.data.local.StrategyCriteriaEntity
 import com.example.data.local.StrategyDao
@@ -50,6 +54,7 @@ class PortfolioRepository(
     private val aiDao: AiRecommendationDao = db.aiRecommendationDao()
     private val alertDao: PriceTargetAlertDao = db.priceTargetAlertDao()
     private val cachedQuoteDao: CachedMarketQuoteDao = db.cachedMarketQuoteDao()
+    private val smartAlertDao: SmartAlertDao = db.smartAlertDao()
 
     val carteiraLocalRepository: CarteiraLocalRepository = CarteiraLocalRepository(carteiraLocalDao)
 
@@ -86,6 +91,9 @@ class PortfolioRepository(
     val cryptoVirtualPositionsFlow: Flow<List<CryptoVirtualPositionEntity>> = cryptoDao.observePositions()
     val savedAiRecommendationsFlow: Flow<List<SavedAiRecommendationEntity>> = aiDao.observeSaved()
     val priceTargetAlertsFlow: Flow<List<PriceTargetAlertEntity>> = alertDao.observeAll()
+    val swingAlertsFlow: Flow<List<AssetSwingAlertEntity>> = smartAlertDao.observeSwingAlerts()
+    val investmentGoalsFlow: Flow<List<InvestmentGoalEntity>> = smartAlertDao.observeInvestmentGoals()
+    val alertHistoryFlow: Flow<List<AlertNotificationHistoryEntity>> = smartAlertDao.observeNotificationHistory()
     val cachedLiveQuotesFlow: Flow<Map<String, LiveMarketQuote>> = cachedQuoteDao.observeAll().map { entities ->
         entities.associate { e ->
             val upper = e.ticker.uppercase()
@@ -1057,4 +1065,47 @@ class PortfolioRepository(
             )
         )
     }
+
+    // --- Smart Alerts (Variações Bruscas & Metas de Investimento) ---
+    suspend fun getActiveSwingAlerts(): List<AssetSwingAlertEntity> = smartAlertDao.getActiveSwingAlerts()
+
+    suspend fun insertSwingAlert(alert: AssetSwingAlertEntity): Long = smartAlertDao.insertSwingAlert(alert)
+
+    suspend fun setSwingAlertEnabled(id: Long, enabled: Boolean) = smartAlertDao.setSwingAlertEnabled(id, enabled)
+
+    suspend fun updateSwingLastEvaluated(id: Long, changePercent: Double, priceBrl: Double, evaluatedAt: Long) =
+        smartAlertDao.updateSwingLastEvaluated(id, changePercent, priceBrl, evaluatedAt)
+
+    suspend fun markSwingAlertTriggered(
+        id: Long,
+        changePercent: Double,
+        priceBrl: Double,
+        triggeredAt: Long,
+        dayKey: String
+    ) = smartAlertDao.markSwingTriggered(id, changePercent, priceBrl, triggeredAt, dayKey)
+
+    suspend fun resetSwingAlertCooldown(id: Long) = smartAlertDao.resetSwingCooldown(id)
+
+    suspend fun deleteSwingAlert(id: Long) = smartAlertDao.deleteSwingAlertById(id)
+
+    suspend fun getActiveInvestmentGoals(): List<InvestmentGoalEntity> = smartAlertDao.getActiveInvestmentGoals()
+
+    suspend fun insertInvestmentGoal(goal: InvestmentGoalEntity): Long = smartAlertDao.insertInvestmentGoal(goal)
+
+    suspend fun setInvestmentGoalEnabled(id: Long, enabled: Boolean) = smartAlertDao.setInvestmentGoalEnabled(id, enabled)
+
+    suspend fun updateInvestmentGoalProgress(id: Long, currentValue: Double) =
+        smartAlertDao.updateGoalProgress(id, currentValue)
+
+    suspend fun markInvestmentGoalTriggered(id: Long, currentValue: Double, triggeredAt: Long) =
+        smartAlertDao.markGoalTriggered(id, currentValue, triggeredAt)
+
+    suspend fun rearmInvestmentGoal(id: Long) = smartAlertDao.rearmInvestmentGoal(id)
+
+    suspend fun deleteInvestmentGoal(id: Long) = smartAlertDao.deleteInvestmentGoalById(id)
+
+    suspend fun insertNotificationHistory(entry: AlertNotificationHistoryEntity): Long =
+        smartAlertDao.insertNotificationHistory(entry)
+
+    suspend fun clearNotificationHistory() = smartAlertDao.clearNotificationHistory()
 }

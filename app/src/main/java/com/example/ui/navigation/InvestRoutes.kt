@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.CandlestickChart
 import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.CurrencyBitcoin
 import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.QueryStats
 import androidx.compose.material.icons.filled.Receipt
@@ -42,6 +43,7 @@ object InvestRoutes {
     const val ROUTE_COMPARADOR = "comparador_valuation"
     const val ROUTE_REBALANCEAMENTO = "rebalanceamento_aporte"
     const val ROUTE_IMPOSTO_DARF = "imposto_renda_darf"
+    const val ROUTE_ALERTAS = "central_alertas"
     const val ROUTE_DATA_COM_GROUP = "data_com_grupo/{groupCode}"
     const val ROUTE_PORTFOLIO_CLASS = "carteira_classe/{assetClassName}"
 
@@ -90,7 +92,8 @@ val ALL_INVEST_MODULES: List<InvestModuleDest> = listOf(
     InvestModuleDest(InvestRoutes.ROUTE_PROFITCHART, 16, "Conexão ProfitChart", "ProfitChart", Icons.Default.Sync, ModuleSection.GESTAO),
     InvestModuleDest(InvestRoutes.ROUTE_COMPARADOR, 17, "Comparador & Valuation", "Comparador", Icons.Default.CompareArrows, ModuleSection.INTELIGENCIA),
     InvestModuleDest(InvestRoutes.ROUTE_REBALANCEAMENTO, 18, "Aporte & Rebalanceamento", "Aporte", Icons.Default.Balance, ModuleSection.GESTAO),
-    InvestModuleDest(InvestRoutes.ROUTE_IMPOSTO_DARF, 19, "IR Mensal & DARF", "IR / DARF", Icons.Default.Receipt, ModuleSection.GESTAO)
+    InvestModuleDest(InvestRoutes.ROUTE_IMPOSTO_DARF, 19, "IR Mensal & DARF", "IR / DARF", Icons.Default.Receipt, ModuleSection.GESTAO),
+    InvestModuleDest(InvestRoutes.ROUTE_ALERTAS, 20, "Alertas & Metas", "Alertas", Icons.Default.NotificationsActive, ModuleSection.GESTAO)
 )
 
 val PRIMARY_NAVIGATION_ROUTES: List<String> = listOf(

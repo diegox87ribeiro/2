@@ -1188,7 +1188,115 @@ class InvestAiCoreTests {
         assertEquals(264.60, draft.computedTotalValue, 0.01)
         assertTrue(draft.buildExternalRefId().startsWith("PRINT:TRXF11:COMPRA:23/11/2026:14:13:21:"))
     }
+
+    @Test
+    fun `smart alert evaluator triggers sharp swings respecting direction and same-day cooldown`() {
+        val anyAlert = com.example.data.local.AssetSwingAlertEntity(
+            id = 1L,
+            ticker = "MTRE3",
+            thresholdPercent = 5.0,
+            direction = com.example.domain.model.SwingDirection.ANY.code,
+            isEnabled = true
+        )
+        val upOnly = anyAlert.copy(id = 2L, direction = com.example.domain.model.SwingDirection.SURGE_UP.code)
+        val downOnly = anyAlert.copy(id = 3L, direction = com.example.domain.model.SwingDirection.DROP_DOWN.code)
+        val alreadyFiredToday = anyAlert.copy(id = 4L, lastTriggeredDayKey = "2026-11-23")
+        val disabled = anyAlert.copy(id = 5L, isEnabled = false)
+
+        assertTrue(com.example.domain.model.SmartAlertEvaluator.isSharpSwingTriggered(anyAlert, 5.2, "2026-11-23"))
+        assertTrue(com.example.domain.model.SmartAlertEvaluator.isSharpSwingTriggered(anyAlert, -5.0, "2026-11-23"))
+        assertFalse(com.example.domain.model.SmartAlertEvaluator.isSharpSwingTriggered(anyAlert, 4.9, "2026-11-23"))
+
+        assertTrue(com.example.domain.model.SmartAlertEvaluator.isSharpSwingTriggered(upOnly, 6.1, "2026-11-23"))
+        assertFalse(com.example.domain.model.SmartAlertEvaluator.isSharpSwingTriggered(upOnly, -8.5, "2026-11-23"))
+
+        assertTrue(com.example.domain.model.SmartAlertEvaluator.isSharpSwingTriggered(downOnly, -5.4, "2026-11-23"))
+        assertFalse(com.example.domain.model.SmartAlertEvaluator.isSharpSwingTriggered(downOnly, 7.2, "2026-11-23"))
+
+        // Cooldown evita spam no mesmo dia, mas libera no dia seguinte
+        assertFalse(com.example.domain.model.SmartAlertEvaluator.isSharpSwingTriggered(alreadyFiredToday, 9.0, "2026-11-23"))
+        assertTrue(com.example.domain.model.SmartAlertEvaluator.isSharpSwingTriggered(alreadyFiredToday, 9.0, "2026-11-24"))
+        assertFalse(com.example.domain.model.SmartAlertEvaluator.isSharpSwingTriggered(disabled, 12.0, "2026-11-23"))
+    }
+
+    @Test
+    fun `smart alert evaluator computes progress and trigger state for all investment goal types`() {
+        val hglg = PortfolioItemView(
+            id = 1L,
+            portfolioType = PortfolioType.REAL,
+            ticker = "HGLG11",
+            name = "Pátria Logística",
+            assetClass = AssetClass.FII,
+            quantity = 100.0,
+            averagePrice = 150.0,
+            currentPrice = 160.0,
+            sector = "Logística",
+            dataComDay = 30,
+            dataSourceLabel = "Manual",
+            isDemo = false,
+            hasMarketPrice = true
+        )
+
+        val equityGoal = com.example.data.local.InvestmentGoalEntity(
+            title = "Patrimônio 100k",
+            goalType = com.example.domain.model.InvestmentGoalType.TOTAL_EQUITY.code,
+            targetValue = 100_000.0
+        )
+        val equitySnap = com.example.domain.model.SmartAlertEvaluator.computeGoalProgress(
+            goal = equityGoal,
+            totalEquityBrl = 105_000.0,
+            estimatedMonthlyDividendsBrl = 850.0,
+            realPositions = listOf(hglg)
+        )
+        assertTrue(equitySnap.isReached)
+        assertEquals(1.0f, equitySnap.progressFraction, 0.001f)
+
+        val divGoal = com.example.data.local.InvestmentGoalEntity(
+            title = "Renda 1k/mês",
+            goalType = com.example.domain.model.InvestmentGoalType.MONTHLY_DIVIDENDS.code,
+            targetValue = 1_000.0
+        )
+        val divSnap = com.example.domain.model.SmartAlertEvaluator.computeGoalProgress(
+            goal = divGoal,
+            totalEquityBrl = 50_000.0,
+            estimatedMonthlyDividendsBrl = 500.0,
+            realPositions = listOf(hglg)
+        )
+        assertFalse(divSnap.isReached)
+        assertEquals(50.0, divSnap.progressPercent, 0.01)
+
+        val assetValGoal = com.example.data.local.InvestmentGoalEntity(
+            title = "R$ 15k em HGLG11",
+            goalType = com.example.domain.model.InvestmentGoalType.ASSET_POSITION_VALUE.code,
+            ticker = "HGLG11",
+            targetValue = 15_000.0
+        )
+        val assetValSnap = com.example.domain.model.SmartAlertEvaluator.computeGoalProgress(
+            goal = assetValGoal,
+            totalEquityBrl = 50_000.0,
+            estimatedMonthlyDividendsBrl = 500.0,
+            realPositions = listOf(hglg)
+        )
+        assertTrue(assetValSnap.isReached)
+        assertEquals(16_000.0, assetValSnap.currentValue, 0.01)
+
+        val assetQtyGoal = com.example.data.local.InvestmentGoalEntity(
+            title = "100 cotas HGLG11",
+            goalType = com.example.domain.model.InvestmentGoalType.ASSET_QUANTITY.code,
+            ticker = "HGLG11",
+            targetValue = 100.0
+        )
+        val assetQtySnap = com.example.domain.model.SmartAlertEvaluator.computeGoalProgress(
+            goal = assetQtyGoal,
+            totalEquityBrl = 50_000.0,
+            estimatedMonthlyDividendsBrl = 500.0,
+            realPositions = listOf(hglg)
+        )
+        assertTrue(assetQtySnap.isReached)
+        assertEquals(100.0, assetQtySnap.currentValue, 0.01)
+    }
 }
+
 
 
 
