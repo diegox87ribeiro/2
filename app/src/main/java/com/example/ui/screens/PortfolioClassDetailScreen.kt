@@ -42,6 +42,7 @@ import com.example.domain.model.PortfolioItemView
 import com.example.ui.components.DataDisclaimerBanner
 import com.example.ui.components.FilterChipBar
 import com.example.ui.components.FintechCard
+import com.example.ui.components.GroupBadge
 import com.example.ui.components.formatBrl
 import com.example.ui.components.formatPct
 import com.example.ui.theme.AmberGold
@@ -69,7 +70,8 @@ fun PortfolioClassDetailScreen(
         currentPrice: Double?,
         sector: String,
         dataComDay: Int?,
-        existingSourceLabel: String
+        existingSourceLabel: String,
+        isCyclical: Boolean
     ) -> Unit,
     onDeletePosition: (Long) -> Unit,
     onOpenCarteira: () -> Unit,
@@ -183,30 +185,43 @@ fun PortfolioClassDetailScreen(
                         verticalAlignment = Alignment.Top
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = EmeraldContainer.copy(alpha = 0.45f),
-                                modifier = Modifier
-                                    .heightIn(min = 48.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .testTag("class_asset_ticker_${pos.ticker}")
-                                    .clickable { editingPosition = pos }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = EmeraldContainer.copy(alpha = 0.45f),
+                                    modifier = Modifier
+                                        .heightIn(min = 48.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .testTag("class_asset_ticker_${pos.ticker}")
+                                        .clickable { editingPosition = pos }
                                 ) {
-                                    Text(pos.ticker, style = MaterialTheme.typography.titleMedium, color = EmeraldPrimary)
-                                    Spacer(Modifier.width(6.dp))
-                                    Icon(Icons.Default.Edit, contentDescription = "Editar ${pos.ticker}", tint = EmeraldPrimary, modifier = Modifier.size(15.dp))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("Editar", style = MaterialTheme.typography.labelSmall, color = EmeraldPrimary)
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(pos.ticker, style = MaterialTheme.typography.titleMedium, color = EmeraldPrimary)
+                                        Spacer(Modifier.width(6.dp))
+                                        Icon(Icons.Default.Edit, contentDescription = "Editar ${pos.ticker}", tint = EmeraldPrimary, modifier = Modifier.size(15.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Editar", style = MaterialTheme.typography.labelSmall, color = EmeraldPrimary)
+                                    }
+                                }
+                                if (pos.isCyclical) {
+                                    GroupBadge(pos.dataComGroup)
                                 }
                             }
                             Spacer(Modifier.height(4.dp))
                             Text("${pos.name} • ${pos.sector}", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                            val cycleSuffix = if (pos.isCyclical) {
+                                "Data-Com: ${pos.dataComDay?.let { "Dia $it" } ?: "N/D"}"
+                            } else {
+                                "Não cíclico${pos.dataComDay?.let { " • Dia $it" }.orEmpty()}"
+                            }
                             Text(
-                                "Peso na carteira: ${"%.1f".format(weightInPortfolio)}% • Data-Com: ${pos.dataComDay?.let { "Dia $it" } ?: "N/D"}",
+                                "Peso na carteira: ${"%.1f".format(weightInPortfolio)}% • $cycleSuffix",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = ElectricCyan
                             )
@@ -253,8 +268,8 @@ fun PortfolioClassDetailScreen(
             catalogAsset = catalogMatch,
             portfolioTotalInvestedBrl = state.realHhi.totalInvestedBrl,
             onDismiss = { editingPosition = null },
-            onSave = { id, ticker, name, ac, qty, pm, cur, sector, dcDay, src ->
-                onUpdatePosition(id, ticker, name, ac, qty, pm, cur, sector, dcDay, src)
+            onSave = { id, ticker, name, ac, qty, pm, cur, sector, dcDay, src, isCyclical ->
+                onUpdatePosition(id, ticker, name, ac, qty, pm, cur, sector, dcDay, src, isCyclical)
                 editingPosition = null
             },
             onDelete = { id ->

@@ -5,6 +5,7 @@ import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.ai.formatFirebaseAiError
 import com.example.data.importexport.ImportParseResult
 import com.example.data.importexport.SpreadsheetImporter
 import com.example.data.local.AppPreferencesState
@@ -24,6 +25,7 @@ import com.example.data.repository.IntegrationAdapterStatus
 import com.example.data.repository.LiveMarketDataRepository
 import com.example.data.repository.LiveQuoteParsers
 import com.example.data.repository.MarketCatalogRepository
+import com.example.data.repository.OrderScreenshotRecognizer
 import com.example.data.repository.PortfolioRepository
 import com.example.data.repository.ProfitChartConnector
 import com.example.data.repository.ReportExporter
@@ -39,19 +41,23 @@ import com.example.domain.model.LiveMarketQuote
 import com.example.domain.model.LiveQuoteLookupState
 import com.example.domain.model.MarketAsset
 import com.example.domain.model.OperationType
+import com.example.domain.model.OrderScreenshotRecognitionState
 import com.example.domain.model.PortfolioItemView
 import com.example.domain.model.PortfolioType
 import com.example.domain.model.PriceAlertCondition
 import com.example.domain.model.PriceTargetEvaluator
 import com.example.domain.model.ProfitChartConnectionState
+import com.example.domain.model.RecognizedOrderDraft
 import com.example.domain.model.SimulationScenarioResult
 import com.example.notifications.DividendDateAlertWorkScheduler
 import com.example.notifications.DividendDateNotificationHelper
 import com.example.notifications.PriceAlertNotificationHelper
 import com.example.notifications.PriceAlertWorkScheduler
+import com.google.firebase.FirebaseApp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -97,6 +103,7 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
     private val repository = PortfolioRepository(application, db, prefsManager)
     private val liveMarketRepository = LiveMarketDataRepository()
     private val profitConnector = ProfitChartConnector(application)
+    private val orderScreenshotRecognizer = OrderScreenshotRecognizer(application)
     private val supabaseAdapter = SupabaseFutureAdapter()
     private val githubAdapter = GitHubFutureAdapter()
 
@@ -115,6 +122,9 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _pendingImportPreview = MutableStateFlow<ImportParseResult?>(null)
     val pendingImportPreview: StateFlow<ImportParseResult?> = _pendingImportPreview.asStateFlow()
+
+    private val _orderScreenshotState = MutableStateFlow<OrderScreenshotRecognitionState>(OrderScreenshotRecognitionState.Idle)
+    val orderScreenshotState: StateFlow<OrderScreenshotRecognitionState> = _orderScreenshotState.asStateFlow()
 
     private val _statusBannerMessage = MutableStateFlow<String?>(null)
     val statusBannerMessage: StateFlow<String?> = _statusBannerMessage.asStateFlow()
@@ -167,14 +177,22 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         val simPos = positions.filter { it.portfolioType == PortfolioType.SIMULATION }
         val latestReal = imports.firstOrNull { it.isActiveRealReference } ?: imports.firstOrNull()
 
+        val realCyclicalByTicker = realPos.associate { it.ticker.trim().uppercase() to it.isCyclical }
         val updatedCatalog = MarketCatalogRepository.catalogAssets.map { base ->
-            val live = liveQuotes[base.ticker.uppercase()]
-            if (live != null) LiveMarketDataRepository.mergeLiveQuoteIntoMarketAsset(base, live) else base
+            val upper = base.ticker.uppercase()
+            val live = liveQuotes[upper]
+            val merged = if (live != null) LiveMarketDataRepository.mergeLiveQuoteIntoMarketAsset(base, live) else base
+            val customCyclical = realCyclicalByTicker[upper]
+            if (customCyclical != null) merged.copy(isCyclical = customCyclical) else merged
         }
         val catalogTickers = updatedCatalog.map { it.ticker.uppercase() }.toSet()
         val extraLiveAssets = liveQuotes.values
             .filter { it.ticker.uppercase() !in catalogTickers }
-            .map { LiveMarketDataRepository.mergeLiveQuoteIntoMarketAsset(null, it) }
+            .map { quote ->
+                val merged = LiveMarketDataRepository.mergeLiveQuoteIntoMarketAsset(null, quote)
+                val customCyclical = realCyclicalByTicker[quote.ticker.uppercase()]
+                if (customCyclical != null) merged.copy(isCyclical = customCyclical) else merged
+            }
 
         InvestDashboardState(
             realPositions = realPos,
@@ -377,7 +395,8 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         averagePrice: Double,
         currentPrice: Double?,
         sector: String,
-        dataComDay: Int?
+        dataComDay: Int?,
+        isCyclical: Boolean = true
     ) {
         viewModelScope.launch {
             repository.addManualPosition(
@@ -389,7 +408,8 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                 averagePrice = averagePrice,
                 currentPrice = currentPrice,
                 sector = sector,
-                dataComDay = dataComDay
+                dataComDay = dataComDay,
+                isCyclical = isCyclical
             )
             _statusBannerMessage.value = "Posição ${ticker.uppercase()} registrada em ${portfolioType.label}."
         }
@@ -428,7 +448,8 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         currentPrice: Double?,
         sector: String,
         dataComDay: Int?,
-        existingSourceLabel: String
+        existingSourceLabel: String,
+        isCyclical: Boolean = true
     ) {
         viewModelScope.launch {
             try {
@@ -443,7 +464,8 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                         currentPrice = currentPrice,
                         sector = sector,
                         dataComDay = dataComDay,
-                        existingSourceLabel = existingSourceLabel
+                        existingSourceLabel = existingSourceLabel,
+                        isCyclical = isCyclical
                     )
                 }
                 _statusBannerMessage.value = "Cadastro e posição de ${ticker.trim().uppercase()} atualizados."
@@ -1083,5 +1105,88 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                 "Falha ao enviar notificação de teste. Verifique as permissões do app."
             }
         }
+    }
+
+    fun recognizeOrderScreenshot(uri: Uri) {
+        val app = getApplication<Application>()
+        val firebaseReady = runCatching {
+            FirebaseApp.getApps(app).isNotEmpty() || FirebaseApp.initializeApp(app) != null
+        }.getOrDefault(false)
+        if (!firebaseReady) {
+            _orderScreenshotState.value = OrderScreenshotRecognitionState.Error(
+                message = "O reconhecimento de prints por IA requer Firebase AI Logic ativo neste aplicativo.",
+                lastImageUriString = uri.toString()
+            )
+            return
+        }
+
+        viewModelScope.launch {
+            _orderScreenshotState.value = OrderScreenshotRecognitionState.Analyzing(
+                statusLabel = "Analisando print de ordens com Gemini..."
+            )
+            try {
+                val result = orderScreenshotRecognizer.recognizeFromUri(uri)
+                if (result.orders.isEmpty()) {
+                    val hint = result.warnings.firstOrNull()
+                        ?: "Nenhuma ordem de compra ou venda foi identificada neste print. Envie uma captura da tela de Ordens Executadas ou Nota de Corretagem."
+                    _orderScreenshotState.value = OrderScreenshotRecognitionState.Error(
+                        message = hint,
+                        lastImageUriString = uri.toString()
+                    )
+                } else {
+                    _orderScreenshotState.value = OrderScreenshotRecognitionState.Review(
+                        result = result,
+                        imageUriString = uri.toString()
+                    )
+                }
+            } catch (e: TimeoutCancellationException) {
+                Log.w("InvestViewModel", "Timeout ao analisar print de ordens", e)
+                _orderScreenshotState.value = OrderScreenshotRecognitionState.Error(
+                    message = "Tempo esgotado ao analisar o print (60s). Verifique sua conexão e tente novamente.",
+                    lastImageUriString = uri.toString()
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e("InvestViewModel", "Falha ao reconhecer print de ordens", e)
+                _orderScreenshotState.value = OrderScreenshotRecognitionState.Error(
+                    message = formatFirebaseAiError(
+                        e,
+                        "Não foi possível ler as ordens do print selecionado. Tente novamente com uma imagem nítida."
+                    ),
+                    lastImageUriString = uri.toString()
+                )
+            }
+        }
+    }
+
+    fun commitRecognizedScreenshotOrders(
+        portfolioType: PortfolioType,
+        selectedOrders: List<RecognizedOrderDraft>,
+        applyToPositions: Boolean
+    ) {
+        viewModelScope.launch {
+            try {
+                val summary = withContext(Dispatchers.IO) {
+                    repository.commitRecognizedScreenshotOrders(
+                        portfolioType = portfolioType,
+                        orders = selectedOrders,
+                        applyToPositions = applyToPositions
+                    )
+                }
+                _orderScreenshotState.value = OrderScreenshotRecognitionState.Idle
+                _statusBannerMessage.value = summary.message
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e("InvestViewModel", "Erro ao lançar ordens do print", e)
+                _statusBannerMessage.value =
+                    "Erro ao lançar ordens do print: ${e.localizedMessage ?: "falha de gravação"}"
+            }
+        }
+    }
+
+    fun dismissOrderScreenshotReview() {
+        _orderScreenshotState.value = OrderScreenshotRecognitionState.Idle
     }
 }

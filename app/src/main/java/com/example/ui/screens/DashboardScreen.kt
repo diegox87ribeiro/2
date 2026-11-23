@@ -61,6 +61,7 @@ import com.example.ui.components.HorizontalBarDistribution
 import com.example.ui.components.InteractiveDonutChart
 import com.example.ui.components.InteractiveMultiLineChart
 import com.example.ui.components.KpiMetricCard
+import com.example.ui.components.PortfolioProfitabilityEvolutionCard
 import com.example.ui.components.SecurityGuardBanner
 import com.example.ui.components.formatBrl
 import com.example.ui.components.formatPct
@@ -389,6 +390,17 @@ fun DashboardScreen(
         }
 
         item {
+            PortfolioProfitabilityEvolutionCard(
+                realPositions = state.realPositions,
+                marketAssets = state.marketAssets,
+                operations = state.operations,
+                benchmarks = state.benchmarks,
+                onGoImport = { onNavigate(InvestRoutes.ROUTE_CARTEIRA) },
+                onLoadDemo = onLoadDemoPortfolio
+            )
+        }
+
+        item {
             FintechCard {
                 Text("Distribuição por Classe (Carteira Real)", style = MaterialTheme.typography.titleMedium)
                 Text(
@@ -539,10 +551,11 @@ fun DashboardScreen(
                 val realByTicker = state.realPositions.associateBy { it.ticker.trim().uppercase() }
                 val marketByTicker = state.marketAssets.associateBy { it.ticker.trim().uppercase() }
                 val effectiveGroupByTicker = (realByTicker.keys + marketByTicker.keys).distinct().mapNotNull { tk ->
+                    val isCyclical = realByTicker[tk]?.isCyclical ?: marketByTicker[tk]?.isCyclical ?: true
                     val effectiveDay = realByTicker[tk]?.dataComDay
                         ?: state.liveQuotesByTicker[tk]?.dataComDay
                         ?: marketByTicker[tk]?.dataComDay
-                    DataComGroup.fromDay(effectiveDay)?.let { tk to it }
+                    DataComGroup.fromDay(effectiveDay, isCyclical)?.let { tk to it }
                 }
                 val groupCounts = groups.map { g ->
                     g.label to effectiveGroupByTicker.count { it.second == g }.toDouble()

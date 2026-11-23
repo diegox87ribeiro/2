@@ -35,8 +35,11 @@ data class AssetDividendRow(
     val receivedYearBrl: Double = 0.0,
     val projectedPerUnitMonthBrl: Double = 0.0,
     val monthlyPoints: List<MonthlyDividendPoint> = emptyList(),
-    val operationsInYear: List<AssetDividendOperationRecord> = emptyList()
+    val operationsInYear: List<AssetDividendOperationRecord> = emptyList(),
+    val isCyclical: Boolean = true
 ) {
+    val dataComGroup: DataComGroup? get() = DataComGroup.fromDay(dataComDay, isCyclical)
+
     fun receivedForMonth(monthIndex: Int): Double {
         return monthlyPoints.getOrNull(monthIndex)?.receivedBrl ?: 0.0
     }
@@ -300,7 +303,8 @@ object DividendMonitorCalculator {
                 receivedYearBrl = recYearTotal,
                 projectedPerUnitMonthBrl = perUnitMonthly,
                 monthlyPoints = perAssetMonthlyPoints,
-                operationsInYear = opsInYearByTicker[ticker].orEmpty().sortedByDescending { it.monthIndex }
+                operationsInYear = opsInYearByTicker[ticker].orEmpty().sortedByDescending { it.monthIndex },
+                isCyclical = firstLot?.isCyclical ?: catalog?.isCyclical ?: true
             )
         }.sortedWith(
             compareByDescending<AssetDividendRow> { it.projectedAnnualBrl + it.receivedAnnualBrl + it.receivedYearBrl }

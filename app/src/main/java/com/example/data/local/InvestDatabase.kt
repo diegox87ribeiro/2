@@ -22,7 +22,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         Ativo::class,
         Transacao::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class InvestDatabase : RoomDatabase() {
@@ -221,6 +221,13 @@ abstract class InvestDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE portfolio_positions ADD COLUMN isCyclical INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE ativos ADD COLUMN ehCiclico INTEGER NOT NULL DEFAULT 1")
+            }
+        }
+
         fun getInstance(context: Context): InvestDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -234,7 +241,8 @@ abstract class InvestDatabase : RoomDatabase() {
                         MIGRATION_3_4,
                         MIGRATION_4_5,
                         MIGRATION_5_6,
-                        MIGRATION_6_7
+                        MIGRATION_6_7,
+                        MIGRATION_7_8
                     )
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()

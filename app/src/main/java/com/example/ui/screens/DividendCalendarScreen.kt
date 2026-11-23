@@ -173,9 +173,10 @@ fun DividendCalendarScreen(
         val sourceBadge: String,
         val ownedQuantity: Double?,
         val nextDataComFormatted: String,
-        val nextDataExFormatted: String
+        val nextDataExFormatted: String,
+        val isCyclical: Boolean = true
     ) {
-        val group: DataComGroup? get() = DataComGroup.fromDay(dataComDay)
+        val group: DataComGroup? get() = DataComGroup.fromDay(dataComDay, isCyclical)
     }
 
     val dividendEntries = remember(state.realPositions, state.marketAssets, state.liveQuotesByTicker) {
@@ -220,7 +221,8 @@ fun DividendCalendarScreen(
                 sourceBadge = badge,
                 ownedQuantity = owned?.quantity,
                 nextDataComFormatted = nextComStr,
-                nextDataExFormatted = nextExStr
+                nextDataExFormatted = nextExStr,
+                isCyclical = owned?.isCyclical ?: asset?.isCyclical ?: true
             )
         }.sortedWith(compareBy<DataComCalendarEntry> { it.ownedQuantity == null }.thenBy { it.dataComDay }.thenBy { it.ticker })
     }
@@ -612,8 +614,17 @@ fun DividendCalendarScreen(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(entry.ticker, style = MaterialTheme.typography.titleMedium, color = EmeraldPrimary)
-                                        Spacer(Modifier.width(8.dp))
-                                        GroupBadge(entry.group)
+                                        if (entry.isCyclical && entry.group != null) {
+                                            Spacer(Modifier.width(8.dp))
+                                            GroupBadge(entry.group)
+                                        } else if (!entry.isCyclical) {
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(
+                                                "Não cíclico",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = ElectricCyan
+                                            )
+                                        }
                                     }
                                     Text(
                                         "${entry.name} • ${entry.assetClass.shortLabel} • ${entry.sourceBadge}",

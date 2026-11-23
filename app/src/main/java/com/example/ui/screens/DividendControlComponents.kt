@@ -157,7 +157,7 @@ internal fun MonthlyAssetDividendCard(
                         style = MaterialTheme.typography.titleMedium,
                         color = EmeraldPrimary
                     )
-                    DataComGroup.fromDay(row.dataComDay)?.let { GroupBadge(it) }
+                    row.dataComGroup?.let { GroupBadge(it) }
                     DividendStatusPill(label = statusLabel, color = statusColor)
                 }
                 Spacer(Modifier.height(2.dp))
@@ -168,7 +168,11 @@ internal fun MonthlyAssetDividendCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                val dcText = row.dataComDay?.let { "Data-Com dia $it" } ?: "Data-Com livre"
+                val dcText = when {
+                    !row.isCyclical -> row.dataComDay?.let { "Não cíclico • Dia $it" } ?: "Não cíclico"
+                    row.dataComDay != null -> "Data-Com dia ${row.dataComDay}"
+                    else -> "Data-Com livre"
+                }
                 val pgtoText = row.paymentDay?.let { " • Pgto dia $it" }.orEmpty()
                 val dyText = if (row.hasEstimateData) {
                     " • DY ${formatPct(row.estimatedDyPercent, false)} • YoC ${formatPct(row.yieldOnCostPercent, false)}"
@@ -471,7 +475,7 @@ internal fun SingleAssetMonthlyDetailSection(
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(activeRow.ticker, style = MaterialTheme.typography.titleLarge, color = EmeraldPrimary)
-                        DataComGroup.fromDay(activeRow.dataComDay)?.let { GroupBadge(it) }
+                        activeRow.dataComGroup?.let { GroupBadge(it) }
                     }
                     Text(
                         "${activeRow.name} • ${"%.0f".format(activeRow.quantity)} cotas/ações • ${activeRow.assetClass.shortLabel}",

@@ -21,6 +21,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -39,12 +41,14 @@ import androidx.compose.ui.unit.dp
 import com.example.data.importexport.ImportParseResult
 import com.example.data.importexport.SpreadsheetImporter
 import com.example.domain.model.AssetClass
+import com.example.domain.model.DataComGroup
 import com.example.domain.model.OperationType
 import com.example.domain.model.PortfolioType
 import com.example.ui.components.formatBrl
 import com.example.ui.theme.AmberGold
 import com.example.ui.theme.CardElevated
 import com.example.ui.theme.ElectricCyan
+import com.example.ui.theme.EmeraldContainer
 import com.example.ui.theme.EmeraldOnPrimary
 import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.MonoValueStyle
@@ -401,7 +405,7 @@ fun ImportStandardSpecDialog(
 fun AddPositionDialog(
     portfolioType: PortfolioType,
     onDismiss: () -> Unit,
-    onConfirm: (String, String, AssetClass, Double, Double, Double?, String, Int?) -> Unit
+    onConfirm: (String, String, AssetClass, Double, Double, Double?, String, Int?, Boolean) -> Unit
 ) {
     var ticker by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
@@ -412,14 +416,36 @@ fun AddPositionDialog(
     var curText by remember { mutableStateOf("") }
     var sector by remember { mutableStateOf("") }
     var dataComText by remember { mutableStateOf("") }
+    var isCyclical by remember { mutableStateOf(true) }
+
+    val parsedDataCom = dataComText.trim().toIntOrNull()?.takeIf { it in 1..31 }
+    val previewGroup = DataComGroup.fromDay(parsedDataCom, isCyclical)
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Nova Posição • ${portfolioType.label}") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(value = ticker, onValueChange = { ticker = it }, label = { Text("Ticker (ex: ITUB4)") }, singleLine = true)
-                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Nome (opcional)") }, singleLine = true)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 440.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = ticker,
+                    onValueChange = { ticker = it },
+                    label = { Text("Ticker (ex: ITUB4)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("add_position_ticker_input")
+                )
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Nome (opcional)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
                 ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
                     OutlinedTextField(
                         value = selectedClass.label,
@@ -431,7 +457,16 @@ fun AddPositionDialog(
                     )
                     ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                         AssetClass.entries.forEach { cls ->
-                            DropdownMenuItem(text = { Text(cls.label) }, onClick = { selectedClass = cls; expanded = false })
+                            DropdownMenuItem(
+                                text = { Text(cls.label) },
+                                onClick = {
+                                    selectedClass = cls
+                                    isCyclical = cls != AssetClass.ETF &&
+                                        cls != AssetClass.RENDA_FIXA &&
+                                        cls != AssetClass.CRIPTO
+                                    expanded = false
+                                }
+                            )
                         }
                     }
                 }
@@ -455,19 +490,85 @@ fun AddPositionDialog(
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f), singleLine = true
                     )
                 }
-                OutlinedTextField(value = sector, onValueChange = { sector = it }, label = { Text("Setor / Segmento") }, singleLine = true)
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(CardElevated.copy(alpha = 0.65f), RoundedCornerShape(10.dp))
+                        .border(1.dp, SubtleBorder, RoundedCornerShape(10.dp))
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        "Perfil de Ciclo (Grupo Data-Com)",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = isCyclical,
+                            onClick = { isCyclical = true },
+                            label = { Text("Cíclico (G1–G4)") },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = EmeraldContainer,
+                                selectedLabelColor = EmeraldPrimary
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("add_position_cyclical_yes")
+                        )
+                        FilterChip(
+                            selected = !isCyclical,
+                            onClick = { isCyclical = false },
+                            label = { Text("Não cíclico") },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = ElectricCyan.copy(alpha = 0.18f),
+                                selectedLabelColor = ElectricCyan
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("add_position_cyclical_no")
+                        )
+                    }
+                    Text(
+                        text = when {
+                            !isCyclical -> "Ativo não cíclico: não receberá sigla de grupo G1, G2, G3 ou G4."
+                            previewGroup != null -> "Será marcado no Grupo ${previewGroup.code} (${previewGroup.label.substringAfter("• ")})."
+                            else -> "Ativo cíclico: classificado automaticamente em G1–G4 conforme o dia Data-Com."
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isCyclical) EmeraldPrimary else ElectricCyan,
+                        modifier = Modifier.testTag("add_position_cyclical_helper")
+                    )
+                }
+
+                OutlinedTextField(
+                    value = sector,
+                    onValueChange = { sector = it },
+                    label = { Text("Setor / Segmento") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         },
         confirmButton = {
-            Button(onClick = {
-                val qty = qtyText.replace(",", ".").toDoubleOrNull() ?: 0.0
-                val pm = pmText.replace(",", ".").toDoubleOrNull() ?: 0.0
-                val cur = curText.replace(",", ".").toDoubleOrNull()
-                val dc = dataComText.toIntOrNull()?.takeIf { it in 1..31 }
-                if (ticker.isNotBlank() && qty > 0 && pm > 0) {
-                    onConfirm(ticker, name, selectedClass, qty, pm, cur, sector, dc)
-                }
-            }) { Text("Salvar") }
+            Button(
+                onClick = {
+                    val qty = qtyText.replace(",", ".").toDoubleOrNull() ?: 0.0
+                    val pm = pmText.replace(",", ".").toDoubleOrNull() ?: 0.0
+                    val cur = curText.replace(",", ".").toDoubleOrNull()
+                    val dc = dataComText.toIntOrNull()?.takeIf { it in 1..31 }
+                    if (ticker.isNotBlank() && qty > 0 && pm > 0) {
+                        onConfirm(ticker, name, selectedClass, qty, pm, cur, sector, dc, isCyclical)
+                    }
+                },
+                modifier = Modifier.testTag("add_position_confirm_button")
+            ) { Text("Salvar") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
     )

@@ -28,6 +28,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -60,6 +62,7 @@ import com.example.ui.theme.AmberGold
 import com.example.ui.theme.CoralRed
 import com.example.ui.theme.DeepNavySurface
 import com.example.ui.theme.ElectricCyan
+import com.example.ui.theme.EmeraldContainer
 import com.example.ui.theme.EmeraldOnPrimary
 import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.MonoValueStyle
@@ -105,7 +108,8 @@ fun AssetPositionDetailAndEditSheet(
         currentPrice: Double?,
         sector: String,
         dataComDay: Int?,
-        existingSourceLabel: String
+        existingSourceLabel: String,
+        isCyclical: Boolean
     ) -> Unit,
     onDelete: (Long) -> Unit
 ) {
@@ -128,6 +132,7 @@ fun AssetPositionDetailAndEditSheet(
     }
     var sector by remember(position.id) { mutableStateOf(position.sector) }
     var dataComText by remember(position.id) { mutableStateOf(position.dataComDay?.toString() ?: "") }
+    var isCyclical by remember(position.id) { mutableStateOf(position.isCyclical) }
     var validationError by remember { mutableStateOf<String?>(null) }
 
     val parsedQty = parseBrlDecimal(qtyText) ?: 0.0
@@ -141,9 +146,9 @@ fun AssetPositionDetailAndEditSheet(
     val parsedDataCom = dataComText.trim().toIntOrNull()?.takeIf { it in 1..31 }
     val marketDataComDay = catalogAsset?.dataComDay?.takeIf { it in 1..31 }
     val effectiveDataComDay = parsedDataCom ?: marketDataComDay
-    val effectiveGroup = DataComGroup.fromDay(effectiveDataComDay)
-    val marketGroup = DataComGroup.fromDay(marketDataComDay)
-    val hasDataComDivergence = parsedDataCom != null && marketDataComDay != null && parsedDataCom != marketDataComDay
+    val effectiveGroup = DataComGroup.fromDay(effectiveDataComDay, isCyclical)
+    val marketGroup = DataComGroup.fromDay(marketDataComDay, isCyclical)
+    val hasDataComDivergence = isCyclical && parsedDataCom != null && marketDataComDay != null && parsedDataCom != marketDataComDay
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -180,13 +185,36 @@ fun AssetPositionDetailAndEditSheet(
                     )
                 }
                 Column(horizontalAlignment = Alignment.End) {
-                    GroupBadge(effectiveGroup, showGroupPrefix = true)
-                    if (effectiveDataComDay != null && effectiveGroup != null) {
-                        Text(
-                            "Dia $effectiveDataComDay • ${effectiveGroup.label.substringAfter("• ")}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextSecondary
-                        )
+                    if (isCyclical) {
+                        GroupBadge(effectiveGroup, showGroupPrefix = true)
+                        if (effectiveDataComDay != null && effectiveGroup != null) {
+                            Text(
+                                "Dia $effectiveDataComDay • ${effectiveGroup.label.substringAfter("• ")}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary
+                            )
+                        }
+                    } else {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = ElectricCyan.copy(alpha = 0.14f),
+                            border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.45f)),
+                            modifier = Modifier.testTag("edit_pos_non_cyclical_badge")
+                        ) {
+                            Text(
+                                text = "Não cíclico",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = ElectricCyan,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                        if (effectiveDataComDay != null) {
+                            Text(
+                                "Dia $effectiveDataComDay",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary
+                            )
+                        }
                     }
                 }
             }
@@ -257,8 +285,16 @@ fun AssetPositionDetailAndEditSheet(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = TextSecondary
                             )
+                            val dataComDisplay = when {
+                                effectiveDataComDay != null && effectiveGroup != null ->
+                                    "Dia $effectiveDataComDay (Grupo ${effectiveGroup.code})"
+                                effectiveDataComDay != null && !isCyclical ->
+                                    "Dia $effectiveDataComDay (Não cíclico)"
+                                !isCyclical -> "Não cíclico"
+                                else -> "N/D"
+                            }
                             Text(
-                                effectiveDataComDay?.let { "Dia $it (Grupo ${effectiveGroup?.code})" } ?: "N/D",
+                                dataComDisplay,
                                 style = MonoValueStyle,
                                 color = ElectricCyan,
                                 modifier = Modifier.testTag("sheet_market_datacom_value")
@@ -338,16 +374,67 @@ fun AssetPositionDetailAndEditSheet(
                         .testTag("edit_pos_datacom")
                 )
             }
-            Text(
-                text = if (effectiveGroup != null && effectiveDataComDay != null) {
-                    "Classificação automática do Grupo Data-Com: Grupo ${effectiveGroup.code} (${effectiveGroup.label.substringAfter("• ")})"
-                } else {
-                    "Informe o dia da Data-Com (1–31) para classificar entre G1 (1–8), G2 (9–16), G3 (17–24) e G4 (25–31)."
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = ElectricCyan,
-                modifier = Modifier.testTag("edit_pos_group_helper")
-            )
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f),
+                border = BorderStroke(1.dp, SubtleBorder),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        "Classificação de Ciclo (Grupo G1–G4)",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = isCyclical,
+                            onClick = { isCyclical = true },
+                            label = { Text("Cíclico (G1–G4)") },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = EmeraldContainer,
+                                selectedLabelColor = EmeraldPrimary
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("edit_pos_cyclical_yes")
+                        )
+                        FilterChip(
+                            selected = !isCyclical,
+                            onClick = { isCyclical = false },
+                            label = { Text("Não cíclico") },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = ElectricCyan.copy(alpha = 0.18f),
+                                selectedLabelColor = ElectricCyan
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("edit_pos_cyclical_no")
+                        )
+                    }
+                    Text(
+                        text = when {
+                            !isCyclical ->
+                                "Ativo não cíclico: não receberá marcação com a sigla do grupo G1, G2, G3 ou G4."
+                            effectiveGroup != null && effectiveDataComDay != null ->
+                                "Classificação automática do Grupo Data-Com: Grupo ${effectiveGroup.code} (${effectiveGroup.label.substringAfter("• ")})"
+                            else ->
+                                "Informe o dia da Data-Com (1–31) para classificar entre G1 (1–8), G2 (9–16), G3 (17–24) e G4 (25–31)."
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isCyclical) ElectricCyan else AmberGold,
+                        modifier = Modifier.testTag("edit_pos_group_helper")
+                    )
+                }
+            }
 
             OutlinedTextField(
                 value = name,
@@ -478,7 +565,8 @@ fun AssetPositionDetailAndEditSheet(
                                     cur?.takeIf { it > 0.0 },
                                     sector,
                                     dc,
-                                    position.dataSourceLabel
+                                    position.dataSourceLabel,
+                                    isCyclical
                                 )
                             }
                         }

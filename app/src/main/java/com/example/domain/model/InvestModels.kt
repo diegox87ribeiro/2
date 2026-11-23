@@ -26,6 +26,11 @@ enum class DataComGroup(
             if (day == null || day !in 1..31) return null
             return entries.firstOrNull { day in it.dayRange }
         }
+
+        fun fromDay(day: Int?, isCyclical: Boolean): DataComGroup? {
+            if (!isCyclical) return null
+            return fromDay(day)
+        }
     }
 }
 
@@ -89,9 +94,10 @@ data class MarketAsset(
     val sourceLabel: String,
     val dataBaseDate: String,
     val riskSummary: String,
-    val isDemoData: Boolean = true
+    val isDemoData: Boolean = true,
+    val isCyclical: Boolean = true
 ) {
-    val dataComGroup: DataComGroup? get() = DataComGroup.fromDay(dataComDay)
+    val dataComGroup: DataComGroup? get() = DataComGroup.fromDay(dataComDay, isCyclical)
 }
 
 data class AiRecommendation(
@@ -233,13 +239,15 @@ data class PortfolioItemView(
     val dataComDay: Int?,
     val dataSourceLabel: String,
     val isDemo: Boolean,
-    val hasMarketPrice: Boolean
+    val hasMarketPrice: Boolean,
+    val isCyclical: Boolean = true
 ) {
     val totalCostBrl: Double get() = quantity * averagePrice
     val totalCurrentBrl: Double get() = quantity * (if (hasMarketPrice && currentPrice > 0) currentPrice else averagePrice)
     val profitLossBrl: Double get() = if (hasMarketPrice && currentPrice > 0) totalCurrentBrl - totalCostBrl else 0.0
     val profitLossPercent: Double
         get() = if (hasMarketPrice && totalCostBrl > 0) (profitLossBrl / totalCostBrl) * 100.0 else 0.0
+    val dataComGroup: DataComGroup? get() = DataComGroup.fromDay(dataComDay, isCyclical)
 }
 
 data class BenchmarkSeries(

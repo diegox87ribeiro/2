@@ -81,6 +81,7 @@ import com.example.domain.model.ConsolidatedExecutiveReport
 import com.example.domain.model.DataComGroup
 import com.example.domain.model.HhiRiskReport
 import com.example.domain.model.OperationType
+import com.example.domain.model.OrderScreenshotRecognitionState
 import com.example.domain.model.PortfolioType
 import com.example.ui.screens.AiAgentsScreen
 import com.example.ui.screens.AssetClassExplorerScreen
@@ -128,6 +129,7 @@ fun InvestAppRoot(
     val selectedPortfolioType by viewModel.selectedPortfolioType.collectAsStateWithLifecycle()
     val importFeedback by viewModel.importFeedback.collectAsStateWithLifecycle()
     val pendingImportPreview by viewModel.pendingImportPreview.collectAsStateWithLifecycle()
+    val orderScreenshotState by viewModel.orderScreenshotState.collectAsStateWithLifecycle()
     val statusBanner by viewModel.statusBannerMessage.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -209,6 +211,7 @@ fun InvestAppRoot(
                     selectedPortfolioType = selectedPortfolioType,
                     importFeedback = importFeedback,
                     pendingImportPreview = pendingImportPreview,
+                    orderScreenshotState = orderScreenshotState,
                     cloudReportsUiState = cloudReportsUiState,
                     isCloudSyncing = isCloudSyncing,
                     onSyncConsolidatedReport = onSyncConsolidatedReport
@@ -256,6 +259,7 @@ fun InvestAppRoot(
                     selectedPortfolioType = selectedPortfolioType,
                     importFeedback = importFeedback,
                     pendingImportPreview = pendingImportPreview,
+                    orderScreenshotState = orderScreenshotState,
                     cloudReportsUiState = cloudReportsUiState,
                     isCloudSyncing = isCloudSyncing,
                     onSyncConsolidatedReport = onSyncConsolidatedReport
@@ -357,6 +361,7 @@ private fun MainScaffoldBody(
     selectedPortfolioType: PortfolioType,
     importFeedback: ImportParseResult?,
     pendingImportPreview: ImportParseResult?,
+    orderScreenshotState: OrderScreenshotRecognitionState,
     cloudReportsUiState: CloudReportsUiState,
     isCloudSyncing: Boolean,
     onSyncConsolidatedReport: (ConsolidatedExecutiveReport, HhiRiskReport, ImportHistoryEntity?, Int) -> Unit
@@ -513,7 +518,11 @@ private fun MainScaffoldBody(
                             onRecordOperation = viewModel::recordOperation,
                             onDeletePosition = viewModel::deletePosition, onUpdateCash = viewModel::updateCashBalance,
                             onOpenProfitChart = { onNavigate(InvestRoutes.ROUTE_PROFITCHART) },
-                            onRefreshPortfolioLive = viewModel::refreshAndApplyLiveQuotesForPortfolio
+                            onRefreshPortfolioLive = viewModel::refreshAndApplyLiveQuotesForPortfolio,
+                            orderScreenshotState = orderScreenshotState,
+                            onRecognizeOrderScreenshot = viewModel::recognizeOrderScreenshot,
+                            onConfirmScreenshotOrders = viewModel::commitRecognizedScreenshotOrders,
+                            onDismissScreenshotReview = viewModel::dismissOrderScreenshotReview
                         )
                     }
                     composable(InvestRoutes.ROUTE_ACOES_BR) {
@@ -673,7 +682,11 @@ private fun MainScaffoldBody(
                             onConnectAndSync = viewModel::connectAndSyncProfitChart,
                             onSyncNow = viewModel::syncProfitChartNow,
                             onImportExportedFile = viewModel::importProfitChartFile,
-                            onDisconnect = viewModel::disconnectProfitChart
+                            onDisconnect = viewModel::disconnectProfitChart,
+                            orderScreenshotState = orderScreenshotState,
+                            onRecognizeOrderScreenshot = viewModel::recognizeOrderScreenshot,
+                            onConfirmScreenshotOrders = viewModel::commitRecognizedScreenshotOrders,
+                            onDismissScreenshotReview = viewModel::dismissOrderScreenshotReview
                         )
                     }
                     composable(InvestRoutes.ROUTE_COMPARADOR) {

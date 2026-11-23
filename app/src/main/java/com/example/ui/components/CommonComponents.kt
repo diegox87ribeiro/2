@@ -470,7 +470,9 @@ fun AssetDetailSheetContent(
                 "P/L" to plDisplay,
                 "Liquidez Diária" to "R$ ${String.format(ptBrLocale, "%.1f", asset.liquidezDiariaMilhoes)}M",
                 "IFR (14)" to String.format(ptBrLocale, "%.1f", asset.rsi14),
-                "Data-Com" to (asset.dataComDay?.let { "Dia $it (Grupo ${asset.dataComGroup?.code})" } ?: "N/A"),
+                "Data-Com" to (asset.dataComDay?.let { day ->
+                    asset.dataComGroup?.let { g -> "Dia $day (Grupo ${g.code})" } ?: "Dia $day (Não cíclico)"
+                } ?: if (!asset.isCyclical) "Não cíclico" else "N/A"),
                 "Teto Bazin (6%)" to (valuation.bazinCeilingPriceBrl?.let { formatBrl(it) } ?: "N/A"),
                 valuation.fairPriceMethodLabel to (valuation.grahamFairPriceBrl?.let { formatBrl(it) } ?: "N/A")
             )

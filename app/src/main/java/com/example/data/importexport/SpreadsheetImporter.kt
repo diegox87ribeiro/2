@@ -60,6 +60,7 @@ object SpreadsheetImporter {
         SpreadsheetColumnSpec("Preço Atual", false, "Preço Atual, Cotação, Valor Atual", "35,80 (vazio se não houver)"),
         SpreadsheetColumnSpec("Setor", false, "Setor, Segmento", "Bancos / Logística"),
         SpreadsheetColumnSpec("Data-Com", false, "Data-Com, Dia Com", "3 / 30 (dia de 1 a 31)"),
+        SpreadsheetColumnSpec("Cíclico", false, "Cíclico, Ciclico, Eh Ciclico", "Sim (marca grupo G1–G4) / Não (sem sigla G1–G4)"),
         SpreadsheetColumnSpec("Dividendo Valor", false, "Dividendo Valor, Provento Valor, Valor Provento, Dividendo, Provento, Rendimento, JCP, Dividendo Por Cota", "27,50 (total) ou por cota"),
         SpreadsheetColumnSpec("Data Provento", false, "Data Provento, Data Pagamento, Data Dividendo, Pgto Data, Data", "15/11/2026"),
         SpreadsheetColumnSpec("Tipo Provento", false, "Tipo Provento, Evento Provento, Evento", "Dividendo / JCP / Rendimento")
@@ -107,13 +108,13 @@ object SpreadsheetImporter {
 
     fun generateStandardCsvTemplate(): String {
         val lines = listOf(
-            "Ticker;Nome;Classe;Quantidade;Preço Médio;Preço Atual;Setor;Data-Com;Dividendo Valor;Data Provento;Tipo Provento",
-            "ITUB4;Itaú Unibanco PN;Ações BR;100;31,50;35,80;Bancos;30;28,40;01/11/2026;JCP",
-            "HGLG11;Pátria Logística FII;FII;25;158,00;156,40;Logística;30;27,50;14/11/2026;Rendimento",
-            "KNCA11;Kinea Crédito Agro FIAGRO;FIAGRO;40;96,20;98,50;Agro / CRAs;30;43,20;13/11/2026;Rendimento",
-            "IVVB11;iShares S&P 500 ETF;ETF;10;340,00;382,50;EUA / S&P 500;;;;",
-            "SELIC29;Tesouro Selic 2029;Renda Fixa;0,50;14900,00;15842,30;Título Público;;;;",
-            "CAIXA;Saldo Disponível em Corretora;Renda Fixa;1;2500,00;;Reserva;;;;"
+            "Ticker;Nome;Classe;Quantidade;Preço Médio;Preço Atual;Setor;Data-Com;Cíclico;Dividendo Valor;Data Provento;Tipo Provento",
+            "ITUB4;Itaú Unibanco PN;Ações BR;100;31,50;35,80;Bancos;30;Sim;28,40;01/11/2026;JCP",
+            "HGLG11;Pátria Logística FII;FII;25;158,00;156,40;Logística;30;Sim;27,50;14/11/2026;Rendimento",
+            "KNCA11;Kinea Crédito Agro FIAGRO;FIAGRO;40;96,20;98,50;Agro / CRAs;30;Sim;43,20;13/11/2026;Rendimento",
+            "IVVB11;iShares S&P 500 ETF;ETF;10;340,00;382,50;EUA / S&P 500;;Não;;;",
+            "SELIC29;Tesouro Selic 2029;Renda Fixa;0,50;14900,00;15842,30;Título Público;;Não;;;",
+            "CAIXA;Saldo Disponível em Corretora;Renda Fixa;1;2500,00;;Reserva;;Não;;;"
         )
         return "\uFEFF" + lines.joinToString("\n")
     }
@@ -166,10 +167,11 @@ object SpreadsheetImporter {
         cashBalanceBrl: Double,
         latestDividendsByTicker: Map<String, Triple<Double, String, String>> = emptyMap()
     ): String {
-        val header = "Ticker;Nome;Classe;Quantidade;Preço Médio;Preço Atual;Setor;Data-Com;Dividendo Valor;Data Provento;Tipo Provento"
+        val header = "Ticker;Nome;Classe;Quantidade;Preço Médio;Preço Atual;Setor;Data-Com;Cíclico;Dividendo Valor;Data Provento;Tipo Provento"
         val rows = positions.map { p ->
             val curStr = if (p.hasMarketPrice && p.currentPrice > 0.0) formatCsvDecimal(p.currentPrice) else ""
             val dcStr = p.dataComDay?.toString().orEmpty()
+            val cyclicalStr = if (p.isCyclical) "Sim" else "Não"
             val divInfo = latestDividendsByTicker[p.ticker.uppercase()]
             val divValStr = divInfo?.first?.takeIf { it > 0.0 }?.let { formatCsvDecimal(it) }.orEmpty()
             val divDateStr = divInfo?.second.orEmpty()
@@ -183,6 +185,7 @@ object SpreadsheetImporter {
                 curStr,
                 escapeCsvCell(p.sector),
                 dcStr,
+                cyclicalStr,
                 divValStr,
                 escapeCsvCell(divDateStr),
                 escapeCsvCell(divTypeStr)
@@ -190,7 +193,7 @@ object SpreadsheetImporter {
         }
         val cashRow = if (cashBalanceBrl > 0.0) {
             listOf(
-                "CAIXA;Saldo em Caixa;Renda Fixa;1;${formatCsvDecimal(cashBalanceBrl)};;Liquidez;;;;"
+                "CAIXA;Saldo em Caixa;Renda Fixa;1;${formatCsvDecimal(cashBalanceBrl)};;Liquidez;;Não;;;"
             )
         } else {
             emptyList()
@@ -439,6 +442,7 @@ object SpreadsheetImporter {
         )
         val sectorIdx = findCol(normHeaders, "setor", "segmento", "sector")
         val dataComIdx = findCol(normHeaders, "data_com", "datacom", "dia_com")
+        val cyclicalIdx = findCol(normHeaders, "ciclico", "eh_ciclico", "is_cyclical", "ativo_ciclico")
         val cashIdx = findCol(normHeaders, "caixa", "saldo_caixa", "cash")
 
         // Campos opcionais de dividendos / proventos na mesma tabela de ativos
@@ -545,6 +549,9 @@ object SpreadsheetImporter {
                 val dataComDay = if (dataComIdx != -1) {
                     parseDataComDay(row.getOrNull(dataComIdx))
                 } else null
+                val isCyclical = if (cyclicalIdx != -1) {
+                    parseCyclicalFlag(row.getOrNull(cyclicalIdx)) ?: true
+                } else true
 
                 val candidate = PortfolioPositionEntity(
                     portfolioType = "REAL",
@@ -557,6 +564,7 @@ object SpreadsheetImporter {
                     hasMarketPrice = hasMarketPrice,
                     sector = row.getOrNull(sectorIdx)?.takeIf { it.isNotBlank() } ?: "Importado",
                     dataComDay = dataComDay,
+                    isCyclical = isCyclical,
                     dataSourceLabel = "Importação $fileType ($fileName)",
                     isDemo = false
                 )
@@ -580,7 +588,8 @@ object SpreadsheetImporter {
                         hasMarketPrice = resolvedHasPrice,
                         name = if (existing.name == existing.ticker && candidate.name != candidate.ticker) candidate.name else existing.name,
                         sector = if (existing.sector == "Importado" && candidate.sector != "Importado") candidate.sector else existing.sector,
-                        dataComDay = existing.dataComDay ?: candidate.dataComDay
+                        dataComDay = existing.dataComDay ?: candidate.dataComDay,
+                        isCyclical = existing.isCyclical && candidate.isCyclical
                     )
                     warnings.add("$rawTicker consolidado em lote único (quantidade somada e PM ponderado).")
                 }
@@ -771,5 +780,18 @@ object SpreadsheetImporter {
         Regex("""^(\d{1,2})/\d{1,2}(?:/\d{2,4})?$""").find(text)?.groupValues?.getOrNull(1)?.toIntOrNull()?.takeIf { it in 1..31 }?.let { return it }
         // Dia isolado ou com prefixo textual (ex.: "30", "Dia 30", "30º")
         return Regex("""\b(\d{1,2})\b""").find(text)?.groupValues?.getOrNull(1)?.toIntOrNull()?.takeIf { it in 1..31 }
+    }
+
+    internal fun parseCyclicalFlag(raw: String?): Boolean? {
+        val norm = raw?.trim()?.lowercase()
+            ?.replace("ã", "a")?.replace("í", "i")?.replace("é", "e")
+            ?.replace(Regex("\\s+"), " ")
+            .orEmpty()
+        if (norm.isBlank()) return null
+        return when (norm) {
+            "nao", "n", "false", "0", "nao ciclico", "naociclico", "no" -> false
+            "sim", "s", "true", "1", "ciclico", "yes" -> true
+            else -> null
+        }
     }
 }

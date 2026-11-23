@@ -36,6 +36,7 @@ interface PortfolioDao {
             hasMarketPrice = :hasMarketPrice,
             sector = :sector,
             dataComDay = :dataComDay,
+            isCyclical = :isCyclical,
             dataSourceLabel = :dataSourceLabel,
             updatedAt = :updatedAt
         WHERE id = :id
@@ -53,7 +54,8 @@ interface PortfolioDao {
         sector: String,
         dataComDay: Int?,
         dataSourceLabel: String,
-        updatedAt: Long = System.currentTimeMillis()
+        updatedAt: Long = System.currentTimeMillis(),
+        isCyclical: Boolean = true
     )
 
     @Query(

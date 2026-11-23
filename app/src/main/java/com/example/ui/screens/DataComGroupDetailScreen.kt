@@ -67,8 +67,10 @@ fun DataComGroupDetailScreen(
     val catalogAssetsInGroup = remember(state.marketAssets, realPositionsByTicker, group) {
         state.marketAssets
             .filter { asset ->
-                val effectiveDay = realPositionsByTicker[asset.ticker.trim().uppercase()]?.dataComDay ?: asset.dataComDay
-                DataComGroup.fromDay(effectiveDay) == group
+                val owned = realPositionsByTicker[asset.ticker.trim().uppercase()]
+                val isCyclical = owned?.isCyclical ?: asset.isCyclical
+                val effectiveDay = owned?.dataComDay ?: asset.dataComDay
+                DataComGroup.fromDay(effectiveDay, isCyclical) == group
             }
             .sortedWith(compareBy<MarketAsset> {
                 realPositionsByTicker[it.ticker.trim().uppercase()]?.dataComDay ?: it.dataComDay ?: 99
@@ -81,7 +83,7 @@ fun DataComGroupDetailScreen(
             .filter { pos ->
                 val upper = pos.ticker.trim().uppercase()
                 val effectiveDay = pos.dataComDay ?: state.liveQuotesByTicker[upper]?.dataComDay ?: marketByTicker[upper]?.dataComDay
-                DataComGroup.fromDay(effectiveDay) == group
+                DataComGroup.fromDay(effectiveDay, pos.isCyclical) == group
             }
             .sortedWith(compareBy<com.example.domain.model.PortfolioItemView> { it.dataComDay ?: 99 }.thenBy { it.ticker })
     }

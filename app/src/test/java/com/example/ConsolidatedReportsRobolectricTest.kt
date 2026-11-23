@@ -139,11 +139,11 @@ class ConsolidatedReportsRobolectricTest {
                     onNotify = {},
                     onLoadDemoReal = {},
                     onClearPortfolio = {},
-                    onAddManualPosition = { _, _, _, _, _, _, _, _, _ -> },
+                    onAddManualPosition = { _, _, _, _, _, _, _, _, _, _ -> },
                     onRecordOperation = { _, _, _, _, _, _ -> },
                     onDeletePosition = {},
                     onUpdateCash = { _, _ -> },
-                    onUpdatePosition = { _, _, _, _, _, _, _, _, _, _ -> }
+                    onUpdatePosition = { _, _, _, _, _, _, _, _, _, _, _ -> }
                 )
             }
         }
@@ -660,7 +660,7 @@ class ConsolidatedReportsRobolectricTest {
                         catalogAsset = divergentMarketAsset,
                         portfolioTotalInvestedBrl = 30_000.0,
                         onDismiss = {},
-                        onSave = { _, _, _, _, _, _, _, _, _, _ -> },
+                        onSave = { _, _, _, _, _, _, _, _, _, _, _ -> },
                         onDelete = {}
                     )
                 }
@@ -680,6 +680,14 @@ class ConsolidatedReportsRobolectricTest {
         composeRule.onNodeWithText("Grupo G1").assertExists()
         composeRule.onNodeWithText("Dia 2 (Grupo G1)").assertExists()
         composeRule.onNodeWithTag("datacom_divergence_banner").assertDoesNotExist()
+
+        // Ao marcar o ativo como Não cíclico, remove a sigla do grupo G1–G4
+        composeRule.onNodeWithTag("edit_pos_cyclical_no").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Grupo G1").assertDoesNotExist()
+        composeRule.onNodeWithText("Grupo G4").assertDoesNotExist()
+        composeRule.onNodeWithTag("edit_pos_non_cyclical_badge").assertExists()
+        composeRule.onNodeWithText("Dia 2 (Não cíclico)").assertExists()
     }
 
     @Test
@@ -738,6 +746,173 @@ class ConsolidatedReportsRobolectricTest {
         composeRule.onNodeWithText("Dia 3").assertExists()
         composeRule.onNodeWithTag("live_quote_datacom_vs_dataex_note").assertExists()
         composeRule.onNodeWithTag("open_investidor10_button").assertExists()
+    }
+
+    @Test
+    fun `order screenshot review dialog lists recognized orders and launches selected valid orders`() {
+        val sampleResult = com.example.domain.model.OrderScreenshotRecognitionResult(
+            brokerHeader = "GENIAL - SWINGTRADE",
+            orders = listOf(
+                com.example.domain.model.RecognizedOrderDraft(
+                    ticker = "TRXF11",
+                    operationType = com.example.domain.model.OperationType.COMPRA,
+                    quantity = 5.0,
+                    unitPrice = 52.92,
+                    totalValue = 264.60,
+                    dateIso = "23/11/2026",
+                    timeLabel = "14:13:21",
+                    statusLabel = "Executada",
+                    brokerLabel = "GENIAL - SWINGTRADE",
+                    isExecuted = true,
+                    isIncomplete = false,
+                    selected = true
+                ),
+                com.example.domain.model.RecognizedOrderDraft(
+                    ticker = "EGAF11",
+                    operationType = com.example.domain.model.OperationType.COMPRA,
+                    quantity = 10.0,
+                    unitPrice = 72.04,
+                    totalValue = 720.40,
+                    dateIso = "23/11/2026",
+                    timeLabel = "13:55:53",
+                    statusLabel = "Executada",
+                    brokerLabel = "GENIAL - SWINGTRADE",
+                    isExecuted = true,
+                    isIncomplete = false,
+                    selected = true
+                ),
+                com.example.domain.model.RecognizedOrderDraft(
+                    ticker = "SMRE11",
+                    operationType = com.example.domain.model.OperationType.COMPRA,
+                    quantity = 10.0,
+                    unitPrice = 0.0,
+                    totalValue = 0.0,
+                    dateIso = "23/11/2026",
+                    statusLabel = "Executada",
+                    brokerLabel = "GENIAL - SWINGTRADE",
+                    isExecuted = true,
+                    isIncomplete = true,
+                    selected = false,
+                    notes = "Cartão cortado na barra inferior"
+                )
+            ),
+            warnings = listOf("1 ordem(ns) parcialmente cortada(s) desmarcada(s) para revisão.")
+        )
+
+        var launchedOrders: List<com.example.domain.model.RecognizedOrderDraft> = emptyList()
+        var appliedPositions = false
+
+        composeRule.setContent {
+            InvestAiTheme {
+                com.example.ui.screens.OrderScreenshotReviewDialog(
+                    state = com.example.domain.model.OrderScreenshotRecognitionState.Review(
+                        result = sampleResult,
+                        imageUriString = "content://screenshot/genial.jpg"
+                    ),
+                    targetPortfolioType = com.example.domain.model.PortfolioType.REAL,
+                    onDismiss = {},
+                    onPickAnotherImage = {},
+                    onConfirmLaunch = { orders, apply ->
+                        launchedOrders = orders
+                        appliedPositions = apply
+                    }
+                )
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("order_screenshot_dialog").assertExists()
+        composeRule.onNodeWithText("Revisar Ordens do Print").assertExists()
+        composeRule.onNodeWithTag("confirm_screenshot_orders_button").performClick()
+
+        org.junit.Assert.assertEquals(2, launchedOrders.size)
+        org.junit.Assert.assertEquals("TRXF11", launchedOrders[0].ticker)
+        org.junit.Assert.assertEquals("EGAF11", launchedOrders[1].ticker)
+        org.junit.Assert.assertTrue(appliedPositions)
+    }
+
+    @Test
+    fun `order screenshot JSON parser extracts Genial Profit orders and flags occluded or non-executed rows`() {
+        val sampleJson = """
+            {
+              "brokerHeader": "GENIAL - SWINGTRADE",
+              "warnings": [],
+              "orders": [
+                {
+                  "ticker": "TRXF11",
+                  "side": "COMPRA",
+                  "quantity": 5.0,
+                  "unitPrice": 52.92,
+                  "totalValue": 264.60,
+                  "dateBr": "23/11/2026",
+                  "timeLabel": "14:13:21",
+                  "status": "Executada",
+                  "orderType": "Limite",
+                  "isIncomplete": false,
+                  "notes": "Normal"
+                },
+                {
+                  "ticker": "EGAF11",
+                  "side": "COMPRA",
+                  "quantity": 10.0,
+                  "unitPrice": 72.04,
+                  "totalValue": 720.40,
+                  "dateBr": "23/11/2026",
+                  "timeLabel": "13:55:53",
+                  "status": "Executada",
+                  "orderType": "Limite",
+                  "isIncomplete": false,
+                  "notes": "Normal"
+                },
+                {
+                  "ticker": "|${'$'}MRE11",
+                  "side": "COMPRA",
+                  "quantity": 10.0,
+                  "unitPrice": 0.0,
+                  "totalValue": 0.0,
+                  "dateBr": "",
+                  "timeLabel": "",
+                  "status": "Executada",
+                  "orderType": "",
+                  "isIncomplete": true,
+                  "notes": "Cartão cortado atrás da barra inferior"
+                },
+                {
+                  "ticker": "VALE3F",
+                  "side": "VENDA",
+                  "quantity": 20.0,
+                  "unitPrice": 61.50,
+                  "totalValue": 0.0,
+                  "dateBr": "2026-11-23",
+                  "timeLabel": "11:02:10",
+                  "status": "Cancelada",
+                  "orderType": "Limite",
+                  "isIncomplete": false,
+                  "notes": ""
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val result = com.example.domain.model.OrderScreenshotJsonParser.parse(
+            jsonText = sampleJson,
+            fallbackDateBr = "23/11/2026"
+        )
+
+        org.junit.Assert.assertEquals("GENIAL - SWINGTRADE", result.brokerHeader)
+        org.junit.Assert.assertEquals(4, result.orders.size)
+        org.junit.Assert.assertEquals("TRXF11", result.orders[0].ticker)
+        org.junit.Assert.assertTrue(result.orders[0].selected)
+        org.junit.Assert.assertEquals("EGAF11", result.orders[1].ticker)
+        org.junit.Assert.assertTrue(result.orders[1].selected)
+        org.junit.Assert.assertEquals("SMRE11", result.orders[2].ticker)
+        org.junit.Assert.assertTrue(result.orders[2].isIncomplete)
+        org.junit.Assert.assertFalse(result.orders[2].selected)
+        org.junit.Assert.assertEquals("VALE3", result.orders[3].ticker)
+        org.junit.Assert.assertEquals(com.example.domain.model.OperationType.VENDA, result.orders[3].operationType)
+        org.junit.Assert.assertFalse(result.orders[3].isExecuted)
+        org.junit.Assert.assertFalse(result.orders[3].selected)
+        org.junit.Assert.assertTrue(result.warnings.isNotEmpty())
     }
 }
 

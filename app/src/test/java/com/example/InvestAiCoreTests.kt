@@ -1009,6 +1009,185 @@ class InvestAiCoreTests {
         assertEquals(19.20, rowMxrf.dividendAmount ?: 0.0, 0.001)
         assertEquals("14/11/2026", parsed.dividends.first { it.ticker == "MXRF11" }.dateIso)
     }
+
+    @Test
+    fun `profitability evolution calculator rebases windows, adds dividends to total return, and computes alpha vs CDI`() {
+        val empty = com.example.domain.model.PortfolioProfitabilityCalculator.compute(
+            realPositions = emptyList(),
+            marketAssets = emptyList(),
+            operations = emptyList(),
+            benchmarks = emptyList()
+        )
+        assertTrue(empty.points.isEmpty())
+
+        val refCal = java.util.Calendar.getInstance().apply {
+            set(2026, java.util.Calendar.NOVEMBER, 23, 12, 0, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val positions = listOf(
+            PortfolioItemView(
+                id = 1L,
+                portfolioType = PortfolioType.REAL,
+                ticker = "ITUB4",
+                name = "Itaú Unibanco PN",
+                assetClass = AssetClass.ACOES_BR,
+                quantity = 100.0,
+                averagePrice = 30.0,
+                currentPrice = 36.0,
+                sector = "Bancos",
+                dataComDay = 30,
+                dataSourceLabel = "Teste",
+                isDemo = false,
+                hasMarketPrice = true
+            )
+        )
+        val operations = listOf(
+            com.example.data.local.PortfolioOperationEntity(
+                id = 10L,
+                portfolioType = PortfolioType.REAL.name,
+                ticker = "ITUB4",
+                operationType = OperationType.PROVENTO.name,
+                quantity = 1.0,
+                unitPrice = 150.0,
+                totalValue = 150.0,
+                dateIso = "10/11/2026",
+                notes = "JCP"
+            )
+        )
+        val benchmarks = listOf(
+            com.example.domain.model.BenchmarkSeries(
+                name = "CDI (Selic)",
+                currentLabel = "+11,0%",
+                return12mPercent = 11.0,
+                normalizedPoints12m = (0..11).map { 100.0 + it * 1.0 },
+                source = "BCB"
+            ),
+            com.example.domain.model.BenchmarkSeries(
+                name = "Ibovespa",
+                currentLabel = "+8,0%",
+                return12mPercent = 8.0,
+                normalizedPoints12m = listOf(100.0, 102.0, 99.0, 101.0, 103.0, 104.0, 102.0, 105.0, 106.0, 107.0, 107.5, 108.0),
+                source = "B3"
+            )
+        )
+
+        val fullYear = com.example.domain.model.PortfolioProfitabilityCalculator.compute(
+            realPositions = positions,
+            marketAssets = emptyList(),
+            operations = operations,
+            benchmarks = benchmarks,
+            range = com.example.domain.model.ProfitabilityRange.Y1,
+            referenceDateMillis = refCal.timeInMillis
+        )
+        assertEquals(12, fullYear.points.size)
+        assertEquals(0.0, fullYear.points.first().portfolioReturnPct, 0.001)
+        assertEquals(20.0, fullYear.currentReturnPct, 0.05) // 30 -> 36 = +20%
+        assertEquals(25.0, fullYear.totalReturnWithDividendsPct, 0.05) // (3600 + 150)/3000 - 1 = +25%
+        assertEquals(11.0, fullYear.cdiReturnPct, 0.05)
+        assertEquals(14.0, fullYear.alphaVsCdiPct, 0.05)
+        assertEquals(150.0, fullYear.totalDividendsBrl, 0.01)
+
+        val threeMonths = com.example.domain.model.PortfolioProfitabilityCalculator.compute(
+            realPositions = positions,
+            marketAssets = emptyList(),
+            operations = operations,
+            benchmarks = benchmarks,
+            range = com.example.domain.model.ProfitabilityRange.M3,
+            referenceDateMillis = refCal.timeInMillis
+        )
+        assertEquals(3, threeMonths.points.size)
+        assertEquals(0.0, threeMonths.points.first().portfolioReturnPct, 0.001)
+        assertEquals(0.0, threeMonths.points.first().cdiReturnPct, 0.001)
+    }
+
+    @Test
+    fun `non-cyclical assets do not receive G1-G4 DataComGroup across domain models, dividend monitor, and CSV import`() {
+        assertEquals(DataComGroup.G4, DataComGroup.fromDay(30, isCyclical = true))
+        assertEquals(null, DataComGroup.fromDay(30, isCyclical = false))
+        assertEquals(null, DataComGroup.fromDay(5, isCyclical = false))
+
+        val cyclicalPos = PortfolioItemView(
+            id = 1L,
+            portfolioType = PortfolioType.REAL,
+            ticker = "HGLG11",
+            name = "Pátria Logística",
+            assetClass = AssetClass.FII,
+            quantity = 10.0,
+            averagePrice = 155.0,
+            currentPrice = 156.40,
+            sector = "Logística",
+            dataComDay = 30,
+            dataSourceLabel = "Manual",
+            isDemo = false,
+            hasMarketPrice = true,
+            isCyclical = true
+        )
+        val nonCyclicalPos = PortfolioItemView(
+            id = 2L,
+            portfolioType = PortfolioType.REAL,
+            ticker = "WEGE3",
+            name = "WEG ON",
+            assetClass = AssetClass.ACOES_BR,
+            quantity = 50.0,
+            averagePrice = 42.0,
+            currentPrice = 52.90,
+            sector = "Bens Industriais",
+            dataComDay = 22,
+            dataSourceLabel = "Manual",
+            isDemo = false,
+            hasMarketPrice = true,
+            isCyclical = false
+        )
+
+        assertEquals(DataComGroup.G4, cyclicalPos.dataComGroup)
+        assertEquals(null, nonCyclicalPos.dataComGroup)
+
+        val summary = com.example.domain.model.DividendMonitorCalculator.compute(
+            realPositions = listOf(cyclicalPos, nonCyclicalPos),
+            marketAssets = MarketCatalogRepository.catalogAssets,
+            operations = emptyList()
+        )
+        val hglgRow = summary.perAssetRows.first { it.ticker == "HGLG11" }
+        val wegeRow = summary.perAssetRows.first { it.ticker == "WEGE3" }
+        assertTrue(hglgRow.isCyclical)
+        assertEquals(DataComGroup.G4, hglgRow.dataComGroup)
+        assertFalse(wegeRow.isCyclical)
+        assertEquals(null, wegeRow.dataComGroup)
+
+        val csv = """
+            Ticker;Nome;Classe;Quantidade;Preço Médio;Preço Atual;Setor;Data-Com;Cíclico
+            HGLG11;Pátria Logística;FII;10;155,00;156,40;Logística;30;Sim
+            WEGE3;WEG ON;Ações BR;50;42,00;52,90;Industrial;22;Não
+        """.trimIndent()
+        val parsed = SpreadsheetImporter.parseCsv("ciclicos.csv", csv)
+        assertEquals(2, parsed.positions.size)
+        assertTrue(parsed.positions.first { it.ticker == "HGLG11" }.isCyclical)
+        assertFalse(parsed.positions.first { it.ticker == "WEGE3" }.isCyclical)
+    }
+
+    @Test
+    fun `order screenshot helpers sanitize tickers, statuses, dates, and build deterministic refs`() {
+        assertEquals("SMRE11", com.example.domain.model.OrderScreenshotJsonParser.sanitizeTicker("|${'$'}MRE11"))
+        assertEquals("VALE3", com.example.domain.model.OrderScreenshotJsonParser.sanitizeTicker("VALE3F"))
+        assertEquals("TRXF11", com.example.domain.model.OrderScreenshotJsonParser.sanitizeTicker(" trxf11 "))
+        assertTrue(com.example.domain.model.OrderScreenshotJsonParser.isExecutedStatus("Executada"))
+        assertFalse(com.example.domain.model.OrderScreenshotJsonParser.isExecutedStatus("Cancelada"))
+        assertEquals("23/11/2026", com.example.domain.model.OrderScreenshotJsonParser.normalizeBrazilianDate("2026-11-23"))
+        assertEquals("23/11/2026", com.example.domain.model.OrderScreenshotJsonParser.normalizeBrazilianDate("23/11/26"))
+
+        val draft = com.example.domain.model.RecognizedOrderDraft(
+            ticker = "TRXF11",
+            operationType = OperationType.COMPRA,
+            quantity = 5.0,
+            unitPrice = 52.92,
+            totalValue = 264.60,
+            dateIso = "23/11/2026",
+            timeLabel = "14:13:21"
+        )
+        assertTrue(draft.isReadyToLaunch)
+        assertEquals(264.60, draft.computedTotalValue, 0.01)
+        assertTrue(draft.buildExternalRefId().startsWith("PRINT:TRXF11:COMPRA:23/11/2026:14:13:21:"))
+    }
 }
 
 

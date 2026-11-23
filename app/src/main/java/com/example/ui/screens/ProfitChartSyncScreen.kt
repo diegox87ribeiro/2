@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -21,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Refresh
@@ -50,7 +52,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.example.domain.model.OperationType
+import com.example.domain.model.OrderScreenshotRecognitionState
+import com.example.domain.model.PortfolioType
 import com.example.domain.model.ProfitChartConnectionState
+import com.example.domain.model.RecognizedOrderDraft
 import com.example.ui.components.DataDisclaimerBanner
 import com.example.ui.components.FintechCard
 import com.example.ui.components.formatBrl
@@ -75,7 +80,11 @@ fun ProfitChartSyncScreen(
     onConnectAndSync: (endpointUrl: String, authToken: String, autoSync: Boolean, applyToPositions: Boolean) -> Unit,
     onSyncNow: () -> Unit,
     onImportExportedFile: (android.net.Uri, applyToPositions: Boolean) -> Unit,
-    onDisconnect: () -> Unit
+    onDisconnect: () -> Unit,
+    orderScreenshotState: OrderScreenshotRecognitionState = OrderScreenshotRecognitionState.Idle,
+    onRecognizeOrderScreenshot: (android.net.Uri) -> Unit = {},
+    onConfirmScreenshotOrders: (PortfolioType, List<RecognizedOrderDraft>, Boolean) -> Unit = { _, _, _ -> },
+    onDismissScreenshotReview: () -> Unit = {}
 ) {
     val prefs = state.preferences
     var endpointUrl by remember(prefs.profitEndpointUrl) { mutableStateOf(prefs.profitEndpointUrl) }
@@ -92,10 +101,20 @@ fun ProfitChartSyncScreen(
         }
     }
 
+    val orderScreenshotPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            onRecognizeOrderScreenshot(uri)
+        }
+    }
+
     val profitOperations = remember(state.operations) {
         state.operations.filter {
             it.externalRefId.startsWith("PROFIT:") ||
-                it.notes.contains("ProfitChart", ignoreCase = true)
+                it.externalRefId.startsWith("PRINT:") ||
+                it.notes.contains("ProfitChart", ignoreCase = true) ||
+                it.notes.contains("Print IA", ignoreCase = true)
         }
     }
 
@@ -362,6 +381,39 @@ fun ProfitChartSyncScreen(
         }
 
         item {
+            FintechCard(borderColor = EmeraldPrimary.copy(alpha = 0.45f)) {
+                Text("Reconhecer Print do Profit Mobile / Corretora (IA)", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Envie um print da lista de ordens executadas (ex.: Profit Mobile, Genial, XP, Rico, BTG). A IA lê os ativos, selos de compra/venda (5C, 10C, 10V), preço médio e data para você revisar e lançar na Carteira Real.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+                Spacer(Modifier.height(10.dp))
+                Button(
+                    onClick = {
+                        orderScreenshotPicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    },
+                    enabled = orderScreenshotState !is OrderScreenshotRecognitionState.Analyzing,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ElectricCyan,
+                        contentColor = EmeraldOnPrimary
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("profitchart_recognize_screenshot_button")
+                ) {
+                    Icon(Icons.Default.DocumentScanner, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Ler Print de Ordens (IA)")
+                }
+            }
+        }
+
+        item {
             Text(
                 "Operações Executadas Sincronizadas (${profitOperations.size})",
                 style = MaterialTheme.typography.titleMedium
@@ -456,6 +508,22 @@ fun ProfitChartSyncScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showGuideDialog = false }) { Text("Entendi") }
+            }
+        )
+    }
+
+    if (orderScreenshotState !is OrderScreenshotRecognitionState.Idle) {
+        OrderScreenshotReviewDialog(
+            state = orderScreenshotState,
+            targetPortfolioType = PortfolioType.REAL,
+            onDismiss = onDismissScreenshotReview,
+            onPickAnotherImage = {
+                orderScreenshotPicker.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
+            },
+            onConfirmLaunch = { orders, applyPositions ->
+                onConfirmScreenshotOrders(PortfolioType.REAL, orders, applyPositions)
             }
         )
     }

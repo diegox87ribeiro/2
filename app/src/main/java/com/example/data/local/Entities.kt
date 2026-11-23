@@ -17,6 +17,7 @@ data class PortfolioPositionEntity(
     val hasMarketPrice: Boolean,
     val sector: String,
     val dataComDay: Int? = null,
+    val isCyclical: Boolean = true,
     val dataSourceLabel: String,
     val isDemo: Boolean = false,
     val updatedAt: Long = System.currentTimeMillis()

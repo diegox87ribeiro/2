@@ -73,7 +73,8 @@ class PortfolioRepository(
                 dataComDay = entity.dataComDay,
                 dataSourceLabel = entity.dataSourceLabel,
                 isDemo = entity.isDemo,
-                hasMarketPrice = entity.hasMarketPrice
+                hasMarketPrice = entity.hasMarketPrice,
+                isCyclical = entity.isCyclical
             )
         }
     }
@@ -213,7 +214,8 @@ class PortfolioRepository(
                             sector = pos.sector,
                             dataComDay = newDataCom,
                             dataSourceLabel = "Atualização ${result.fileType} ($dateTag)",
-                            updatedAt = now
+                            updatedAt = now,
+                            isCyclical = pos.isCyclical
                         )
                         updatedTickers.add(cleanTicker)
                     }
@@ -291,13 +293,13 @@ class PortfolioRepository(
                 portfolioType = "REAL", ticker = "IVVB11", name = "iShares S&P 500 ETF",
                 assetClass = AssetClass.ETF.name, quantity = 14.0, averagePrice = 340.00,
                 currentPrice = 382.50, hasMarketPrice = true, sector = "EUA / S&P 500", dataComDay = null,
-                dataSourceLabel = "Demonstração Fictícia", isDemo = true
+                isCyclical = false, dataSourceLabel = "Demonstração Fictícia", isDemo = true
             ),
             PortfolioPositionEntity(
                 portfolioType = "REAL", ticker = "SELIC29", name = "Tesouro Selic 2029",
                 assetClass = AssetClass.RENDA_FIXA.name, quantity = 0.5, averagePrice = 14900.00,
                 currentPrice = 15842.30, hasMarketPrice = true, sector = "Título Público Federal", dataComDay = null,
-                dataSourceLabel = "Demonstração Fictícia", isDemo = true
+                isCyclical = false, dataSourceLabel = "Demonstração Fictícia", isDemo = true
             )
         )
         val history = ImportHistoryEntity(
@@ -335,7 +337,8 @@ class PortfolioRepository(
         averagePrice: Double,
         currentPrice: Double?,
         sector: String,
-        dataComDay: Int?
+        dataComDay: Int?,
+        isCyclical: Boolean = true
     ) {
         val cleanTicker = ticker.trim().uppercase()
         val hasPrice = currentPrice != null && currentPrice > 0.0
@@ -350,6 +353,7 @@ class PortfolioRepository(
             hasMarketPrice = hasPrice,
             sector = sector.ifBlank { assetClass.shortLabel },
             dataComDay = dataComDay,
+            isCyclical = isCyclical,
             dataSourceLabel = "Registro Manual (${portfolioType.label})",
             isDemo = false
         )
@@ -466,7 +470,8 @@ class PortfolioRepository(
                                 sector = existing.sector,
                                 dataComDay = existing.dataComDay,
                                 dataSourceLabel = "ProfitChart Sync",
-                                updatedAt = now
+                                updatedAt = now,
+                                isCyclical = existing.isCyclical
                             )
                             currentReal[exec.ticker.uppercase()] = existing.copy(
                                 quantity = totalQty,
@@ -497,7 +502,8 @@ class PortfolioRepository(
                                     sector = existing.sector,
                                     dataComDay = existing.dataComDay,
                                     dataSourceLabel = "ProfitChart Sync",
-                                    updatedAt = now
+                                    updatedAt = now,
+                                    isCyclical = existing.isCyclical
                                 )
                                 currentReal[exec.ticker.uppercase()] = existing.copy(
                                     quantity = remainingQty,
@@ -553,6 +559,192 @@ class PortfolioRepository(
         )
     }
 
+    suspend fun commitRecognizedScreenshotOrders(
+        portfolioType: PortfolioType,
+        orders: List<com.example.domain.model.RecognizedOrderDraft>,
+        applyToPositions: Boolean
+    ): com.example.domain.model.OrderScreenshotLaunchSummary {
+        val now = System.currentTimeMillis()
+        val today = SimpleDateFormat("dd/MM/yyyy", Locale("pt", "BR")).format(Date(now))
+        val validOrders = orders.filter { it.isReadyToLaunch }
+        if (validOrders.isEmpty()) {
+            return com.example.domain.model.OrderScreenshotLaunchSummary(
+                launchedCount = 0,
+                skippedDuplicatesCount = 0,
+                updatedPositionsCount = 0,
+                message = "Nenhuma ordem válida selecionada para lançamento."
+            )
+        }
+
+        val existingRefs = portfolioDao.getExistingExternalRefIds().toHashSet()
+        val newOrders = validOrders.filter { it.buildExternalRefId() !in existingRefs }
+        val duplicates = validOrders.size - newOrders.size
+
+        if (newOrders.isEmpty()) {
+            return com.example.domain.model.OrderScreenshotLaunchSummary(
+                launchedCount = 0,
+                skippedDuplicatesCount = duplicates,
+                updatedPositionsCount = 0,
+                message = "Todas as $duplicates ordem(ns) selecionadas deste print já foram lançadas anteriormente."
+            )
+        }
+
+        val opEntities = newOrders.map { order ->
+            val cleanTicker = order.ticker.trim().uppercase()
+            val total = order.computedTotalValue
+            val resolvedDate = order.dateIso.trim().ifBlank { today }
+            val detailNotes = buildList {
+                if (order.brokerLabel.isNotBlank()) add(order.brokerLabel)
+                add("Print IA")
+                if (order.orderTypeLabel.isNotBlank()) add(order.orderTypeLabel)
+                if (order.timeLabel.isNotBlank()) add(order.timeLabel)
+            }.joinToString(" • ")
+
+            PortfolioOperationEntity(
+                portfolioType = portfolioType.name,
+                ticker = cleanTicker,
+                operationType = order.operationType.name,
+                quantity = order.quantity,
+                unitPrice = order.unitPrice,
+                totalValue = total,
+                dateIso = resolvedDate,
+                notes = detailNotes,
+                externalRefId = order.buildExternalRefId(),
+                brokerAccount = order.brokerLabel
+            )
+        }
+        portfolioDao.insertOperations(opEntities)
+
+        var updatedPositionsCount = 0
+        if (applyToPositions) {
+            val currentMap = portfolioDao.getPositionsByType(portfolioType.name)
+                .associateBy { it.ticker.trim().uppercase() }
+                .toMutableMap()
+
+            for (order in newOrders) {
+                val cleanTicker = order.ticker.trim().uppercase()
+                val existing = currentMap[cleanTicker]
+                val sourceTag = if (order.brokerLabel.isNotBlank()) {
+                    "Print IA (${order.brokerLabel})"
+                } else {
+                    "Print IA (${portfolioType.label})"
+                }
+
+                when (order.operationType) {
+                    OperationType.COMPRA -> {
+                        if (existing == null) {
+                            val assetClass = LiveQuoteParsers.inferAssetClassFromTicker(cleanTicker)
+                            val defaultCyclical = assetClass != AssetClass.ETF &&
+                                assetClass != AssetClass.RENDA_FIXA &&
+                                assetClass != AssetClass.CRIPTO
+                            val inserted = PortfolioPositionEntity(
+                                portfolioType = portfolioType.name,
+                                ticker = cleanTicker,
+                                name = cleanTicker,
+                                assetClass = assetClass.name,
+                                quantity = order.quantity,
+                                averagePrice = order.unitPrice,
+                                currentPrice = order.unitPrice,
+                                hasMarketPrice = true,
+                                sector = assetClass.shortLabel,
+                                dataComDay = null,
+                                isCyclical = defaultCyclical,
+                                dataSourceLabel = sourceTag,
+                                isDemo = false
+                            )
+                            val newId = portfolioDao.insertPosition(inserted)
+                            currentMap[cleanTicker] = inserted.copy(id = newId)
+                        } else {
+                            val totalQty = existing.quantity + order.quantity
+                            val weightedAvg = if (totalQty > 0.0) {
+                                ((existing.quantity * existing.averagePrice) + (order.quantity * order.unitPrice)) / totalQty
+                            } else {
+                                order.unitPrice
+                            }
+                            portfolioDao.updatePositionById(
+                                id = existing.id,
+                                ticker = existing.ticker,
+                                name = existing.name,
+                                assetClass = existing.assetClass,
+                                quantity = totalQty,
+                                averagePrice = weightedAvg,
+                                currentPrice = order.unitPrice,
+                                hasMarketPrice = true,
+                                sector = existing.sector,
+                                dataComDay = existing.dataComDay,
+                                dataSourceLabel = sourceTag,
+                                updatedAt = now,
+                                isCyclical = existing.isCyclical
+                            )
+                            currentMap[cleanTicker] = existing.copy(
+                                quantity = totalQty,
+                                averagePrice = weightedAvg,
+                                currentPrice = order.unitPrice,
+                                hasMarketPrice = true
+                            )
+                        }
+                        updatedPositionsCount++
+                    }
+
+                    OperationType.VENDA -> {
+                        if (existing != null) {
+                            val remainingQty = (existing.quantity - order.quantity).coerceAtLeast(0.0)
+                            if (remainingQty <= 0.0001) {
+                                portfolioDao.deletePositionById(existing.id)
+                                currentMap.remove(cleanTicker)
+                                if (portfolioType == PortfolioType.REAL) {
+                                    carteiraLocalRepository.excluirAtivoPorTicker(cleanTicker)
+                                }
+                            } else {
+                                portfolioDao.updatePositionById(
+                                    id = existing.id,
+                                    ticker = existing.ticker,
+                                    name = existing.name,
+                                    assetClass = existing.assetClass,
+                                    quantity = remainingQty,
+                                    averagePrice = existing.averagePrice,
+                                    currentPrice = order.unitPrice,
+                                    hasMarketPrice = true,
+                                    sector = existing.sector,
+                                    dataComDay = existing.dataComDay,
+                                    dataSourceLabel = sourceTag,
+                                    updatedAt = now,
+                                    isCyclical = existing.isCyclical
+                                )
+                                currentMap[cleanTicker] = existing.copy(
+                                    quantity = remainingQty,
+                                    currentPrice = order.unitPrice,
+                                    hasMarketPrice = true
+                                )
+                            }
+                            updatedPositionsCount++
+                        }
+                    }
+
+                    else -> Unit
+                }
+            }
+            if (portfolioType == PortfolioType.REAL) {
+                mirrorRealPositionsToAtivos(currentMap.values.toList())
+            }
+        }
+
+        if (portfolioType == PortfolioType.REAL) {
+            opEntities.forEach { mirrorRealOperationToTransacao(it) }
+        }
+
+        val posSuffix = if (updatedPositionsCount > 0) " e $updatedPositionsCount posição(ões) atualizada(s)" else ""
+        val dupSuffix = if (duplicates > 0) " ($duplicates duplicada(s) ignorada(s))" else ""
+        val msg = "${newOrders.size} ordem(ns) lançada(s) na ${portfolioType.label}$posSuffix$dupSuffix."
+
+        return com.example.domain.model.OrderScreenshotLaunchSummary(
+            launchedCount = newOrders.size,
+            skippedDuplicatesCount = duplicates,
+            updatedPositionsCount = updatedPositionsCount,
+            message = msg
+        )
+    }
+
     suspend fun recordOperation(
         portfolioType: PortfolioType,
         ticker: String,
@@ -595,7 +787,8 @@ class PortfolioRepository(
         currentPrice: Double?,
         sector: String,
         dataComDay: Int?,
-        existingSourceLabel: String
+        existingSourceLabel: String,
+        isCyclical: Boolean = true
     ) {
         val cleanTicker = ticker.trim().uppercase()
         val hasPrice = currentPrice != null && currentPrice > 0.0
@@ -616,7 +809,8 @@ class PortfolioRepository(
             sector = sector.trim().ifBlank { assetClass.shortLabel },
             dataComDay = dataComDay?.takeIf { it in 1..31 },
             dataSourceLabel = updatedSource,
-            updatedAt = System.currentTimeMillis()
+            updatedAt = System.currentTimeMillis(),
+            isCyclical = isCyclical
         )
         val realPositions = portfolioDao.getPositionsByType(PortfolioType.REAL.name)
         if (realPositions.any { it.id == id }) {
@@ -812,6 +1006,7 @@ class PortfolioRepository(
         precoAtual = currentPrice,
         possuiCotacaoMercado = hasMarketPrice,
         dataComDia = dataComDay,
+        ehCiclico = isCyclical,
         origemDados = dataSourceLabel.ifBlank { "Local" },
         atualizadoEm = updatedAt
     )

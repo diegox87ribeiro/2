@@ -1,14 +1,17 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Surface
 import androidx.compose.ui.draw.clip
+import com.example.ui.components.GroupBadge
 import com.example.ui.theme.EmeraldContainer
 
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -27,6 +30,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
@@ -58,8 +62,10 @@ import com.example.data.importexport.ImportParseResult
 import com.example.data.importexport.SpreadsheetImporter
 import com.example.domain.model.AssetClass
 import com.example.domain.model.OperationType
+import com.example.domain.model.OrderScreenshotRecognitionState
 import com.example.domain.model.PortfolioItemView
 import com.example.domain.model.PortfolioType
+import com.example.domain.model.RecognizedOrderDraft
 import com.example.ui.components.DataDisclaimerBanner
 import com.example.ui.components.FintechCard
 import com.example.ui.components.formatBrl
@@ -93,7 +99,7 @@ fun PortfolioScreen(
     onNotify: (String) -> Unit,
     onLoadDemoReal: () -> Unit,
     onClearPortfolio: (PortfolioType) -> Unit,
-    onAddManualPosition: (PortfolioType, String, String, AssetClass, Double, Double, Double?, String, Int?) -> Unit,
+    onAddManualPosition: (PortfolioType, String, String, AssetClass, Double, Double, Double?, String, Int?, Boolean) -> Unit,
     onRecordOperation: (PortfolioType, String, OperationType, Double, Double, String) -> Unit,
     onDeletePosition: (Long) -> Unit,
     onUpdateCash: (PortfolioType, Double) -> Unit,
@@ -107,10 +113,15 @@ fun PortfolioScreen(
         Double?,
         String,
         Int?,
-        String
-    ) -> Unit = { _, _, _, _, _, _, _, _, _, _ -> },
+        String,
+        Boolean
+    ) -> Unit = { _, _, _, _, _, _, _, _, _, _, _ -> },
     onOpenProfitChart: () -> Unit = {},
-    onRefreshPortfolioLive: (PortfolioType) -> Unit = {}
+    onRefreshPortfolioLive: (PortfolioType) -> Unit = {},
+    orderScreenshotState: OrderScreenshotRecognitionState = OrderScreenshotRecognitionState.Idle,
+    onRecognizeOrderScreenshot: (android.net.Uri) -> Unit = {},
+    onConfirmScreenshotOrders: (PortfolioType, List<RecognizedOrderDraft>, Boolean) -> Unit = { _, _, _ -> },
+    onDismissScreenshotReview: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var showAddPositionDialog by remember { mutableStateOf(false) }
@@ -123,6 +134,12 @@ fun PortfolioScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) onImportUri(uri)
+    }
+
+    val orderScreenshotPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) onRecognizeOrderScreenshot(uri)
     }
 
     val templateSaver = rememberLauncherForActivityResult(
@@ -275,6 +292,29 @@ fun PortfolioScreen(
                             Spacer(Modifier.width(6.dp))
                             Text("Nova Posição")
                         }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+
+                    Button(
+                        onClick = {
+                            orderScreenshotPicker.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        },
+                        enabled = orderScreenshotState !is OrderScreenshotRecognitionState.Analyzing,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ElectricCyan,
+                            contentColor = EmeraldOnPrimary
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .testTag("recognize_order_screenshot_button")
+                    ) {
+                        Icon(Icons.Default.DocumentScanner, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Ler Print e Lançar Ordem (IA)")
                     }
 
                     Spacer(Modifier.height(8.dp))
@@ -500,8 +540,8 @@ fun PortfolioScreen(
         AddPositionDialog(
             portfolioType = selectedType,
             onDismiss = { showAddPositionDialog = false },
-            onConfirm = { ticker, name, cls, qty, pm, cur, sec, dc ->
-                onAddManualPosition(selectedType, ticker, name, cls, qty, pm, cur, sec, dc)
+            onConfirm = { ticker, name, cls, qty, pm, cur, sec, dc, isCyclical ->
+                onAddManualPosition(selectedType, ticker, name, cls, qty, pm, cur, sec, dc, isCyclical)
                 showAddPositionDialog = false
             }
         )
@@ -537,7 +577,7 @@ fun PortfolioScreen(
             catalogAsset = catalogMatch,
             portfolioTotalInvestedBrl = activeHhi.totalInvestedBrl,
             onDismiss = { selectedPositionForEdit = null },
-            onSave = { id, ticker, name, assetClass, qty, pm, cur, sector, dataComDay, existingSource ->
+            onSave = { id, ticker, name, assetClass, qty, pm, cur, sector, dataComDay, existingSource, isCyclical ->
                 onUpdatePosition(
                     id,
                     ticker,
@@ -548,13 +588,30 @@ fun PortfolioScreen(
                     cur,
                     sector,
                     dataComDay,
-                    existingSource
+                    existingSource,
+                    isCyclical
                 )
                 selectedPositionForEdit = null
             },
             onDelete = { id ->
                 onDeletePosition(id)
                 selectedPositionForEdit = null
+            }
+        )
+    }
+
+    if (orderScreenshotState !is OrderScreenshotRecognitionState.Idle) {
+        OrderScreenshotReviewDialog(
+            state = orderScreenshotState,
+            targetPortfolioType = selectedType,
+            onDismiss = onDismissScreenshotReview,
+            onPickAnotherImage = {
+                orderScreenshotPicker.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
+            },
+            onConfirmLaunch = { orders, applyToPositions ->
+                onConfirmScreenshotOrders(selectedType, orders, applyToPositions)
             }
         )
     }
@@ -573,37 +630,59 @@ private fun PositionCard(
             verticalAlignment = Alignment.Top
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = EmeraldContainer.copy(alpha = 0.45f),
-                    modifier = Modifier
-                        .heightIn(min = 48.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .testTag("ticker_edit_button_${pos.ticker}")
-                        .clickable { onOpenCadastroAndEdit() }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = EmeraldContainer.copy(alpha = 0.45f),
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .testTag("ticker_edit_button_${pos.ticker}")
+                            .clickable { onOpenCadastroAndEdit() }
                     ) {
-                        Text(
-                            pos.ticker + if (pos.isDemo) " [DEMO]" else "",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = EmeraldPrimary
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Icon(
-                            Icons.Default.Edit,
-                            contentDescription = "Acessar cadastro e editar ${pos.ticker}",
-                            tint = EmeraldPrimary,
-                            modifier = Modifier.size(15.dp)
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            "Cadastro / Editar",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = EmeraldPrimary
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                pos.ticker + if (pos.isDemo) " [DEMO]" else "",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = EmeraldPrimary
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Icon(
+                                Icons.Default.Edit,
+                                contentDescription = "Acessar cadastro e editar ${pos.ticker}",
+                                tint = EmeraldPrimary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                "Cadastro / Editar",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = EmeraldPrimary
+                            )
+                        }
+                    }
+                    if (pos.isCyclical) {
+                        GroupBadge(pos.dataComGroup)
+                    } else {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = ElectricCyan.copy(alpha = 0.12f),
+                            border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.4f)),
+                            modifier = Modifier.testTag("position_non_cyclical_badge_${pos.ticker}")
+                        ) {
+                            Text(
+                                text = "Não cíclico",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ElectricCyan,
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                            )
+                        }
                     }
                 }
                 Spacer(Modifier.height(4.dp))
