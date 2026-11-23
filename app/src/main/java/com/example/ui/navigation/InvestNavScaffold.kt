@@ -67,7 +67,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
@@ -493,7 +495,18 @@ private fun MainScaffoldBody(
                             selected = currentRoute == mod.route,
                             onClick = { onNavigate(mod.route) },
                             icon = { Icon(mod.icon, contentDescription = mod.shortTitle) },
-                            label = { Text(mod.shortTitle, maxLines = 1) },
+                            label = {
+                                Text(
+                                    text = mod.shortTitle,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 10.sp,
+                                        letterSpacing = 0.sp
+                                    )
+                                )
+                            },
                             colors = NavigationBarItemDefaults.colors(selectedIconColor = EmeraldPrimary, selectedTextColor = EmeraldPrimary, indicatorColor = EmeraldContainer),
                             modifier = Modifier.testTag("bottom_nav_${mod.route}")
                         )

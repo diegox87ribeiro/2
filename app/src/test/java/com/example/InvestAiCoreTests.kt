@@ -1471,5 +1471,63 @@ class InvestAiCoreTests {
         assertTrue(win.isReadyToLaunch)
         assertTrue(win.buildExternalRefId().startsWith("NOTA:534005:WINZ26:VENDA:03/11/2026:DT:"))
     }
+
+    @Test
+    fun `resolveAppCheckMode uses debug token on emulator harness and reCAPTCHA Enterprise on physical debug APK`() {
+        // 1. Emulador / Harness AI Studio com token injetado via Intent
+        assertEquals(
+            com.example.ai.AppCheckProviderMode.DEBUG_HARNESS_TOKEN,
+            com.example.ai.resolveAppCheckMode(
+                isDebugBuild = true,
+                intentDebugToken = "12345678-aaaa-bbbb-cccc-1234567890ab",
+                hasSavedHarnessDebugToken = false,
+                recaptchaSiteKey = "6Lc2ZB0uAAAAAEFDwmkJPffRvbjNMf14qpKja0Wy"
+            )
+        )
+
+        // 2. Reabertura do emulador que já recebeu token via Intent anteriormente
+        assertEquals(
+            com.example.ai.AppCheckProviderMode.DEBUG_HARNESS_TOKEN,
+            com.example.ai.resolveAppCheckMode(
+                isDebugBuild = true,
+                intentDebugToken = null,
+                hasSavedHarnessDebugToken = true,
+                recaptchaSiteKey = "6Lc2ZB0uAAAAAEFDwmkJPffRvbjNMf14qpKja0Wy"
+            )
+        )
+
+        // 3. Smartphone físico instalando app-debug.apk sem token de depuração via Intent -> usa reCAPTCHA Enterprise
+        assertEquals(
+            com.example.ai.AppCheckProviderMode.RECAPTCHA_ENTERPRISE,
+            com.example.ai.resolveAppCheckMode(
+                isDebugBuild = true,
+                intentDebugToken = null,
+                hasSavedHarnessDebugToken = false,
+                recaptchaSiteKey = "6Lc2ZB0uAAAAAEFDwmkJPffRvbjNMf14qpKja0Wy"
+            )
+        )
+
+        // 4. Build Release -> sempre reCAPTCHA Enterprise
+        assertEquals(
+            com.example.ai.AppCheckProviderMode.RECAPTCHA_ENTERPRISE,
+            com.example.ai.resolveAppCheckMode(
+                isDebugBuild = false,
+                intentDebugToken = "ignored-in-release",
+                hasSavedHarnessDebugToken = true,
+                recaptchaSiteKey = "6Lc2ZB0uAAAAAEFDwmkJPffRvbjNMf14qpKja0Wy"
+            )
+        )
+
+        // 5. Debug local sem Intent token e sem recaptcha_site_key -> fallback DebugAppCheckProviderFactory
+        assertEquals(
+            com.example.ai.AppCheckProviderMode.DEBUG_FALLBACK,
+            com.example.ai.resolveAppCheckMode(
+                isDebugBuild = true,
+                intentDebugToken = null,
+                hasSavedHarnessDebugToken = false,
+                recaptchaSiteKey = null
+            )
+        )
+    }
 }
 

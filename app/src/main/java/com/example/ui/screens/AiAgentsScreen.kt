@@ -9,6 +9,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -78,6 +80,7 @@ import com.example.ui.viewmodel.InvestDashboardState
 import com.example.ui.viewmodel.VoiceCaptureMode
 import java.util.Locale
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AiAgentsScreen(
     state: InvestDashboardState,
@@ -405,10 +408,10 @@ fun AiAgentsScreen(
                     )
 
                     Spacer(Modifier.height(8.dp))
-                    Row(
+                    FlowRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalArrangement = Arrangement.Center
                     ) {
                         TextButton(
                             onClick = aiAgentsViewModel::togglePromptPreview,
@@ -416,11 +419,19 @@ fun AiAgentsScreen(
                         ) {
                             Icon(Icons.Default.Code, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text(if (promptInput.showPromptPreview) "Ocultar Prompt Estruturado" else "Visualizar Prompt Estruturado")
+                            Text(
+                                text = if (promptInput.showPromptPreview) "Ocultar Prompt" else "Ver Prompt Estruturado",
+                                maxLines = 1,
+                                softWrap = false
+                            )
                         }
                         if (aiUiState !is AiAgentUiState.Idle) {
                             TextButton(onClick = aiAgentsViewModel::resetResult) {
-                                Text("Limpar Resultado")
+                                Text(
+                                    text = "Limpar Resultado",
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
                             }
                         }
                     }
