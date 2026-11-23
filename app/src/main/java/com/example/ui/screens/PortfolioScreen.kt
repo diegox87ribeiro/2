@@ -55,6 +55,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.data.importexport.ImportParseResult
+import com.example.data.importexport.SpreadsheetImporter
 import com.example.domain.model.AssetClass
 import com.example.domain.model.OperationType
 import com.example.domain.model.PortfolioItemView
@@ -87,6 +88,7 @@ fun PortfolioScreen(
     onDismissPendingImport: () -> Unit,
     onDismissImportFeedback: () -> Unit,
     onBuildTemplateCsv: () -> String,
+    onBuildQuickUpdateCsv: () -> String = { SpreadsheetImporter.generateQuickUpdateCsvTemplate() },
     onBuildPortfolioCsv: (PortfolioType) -> String,
     onNotify: (String) -> Unit,
     onLoadDemoReal: () -> Unit,
@@ -131,9 +133,24 @@ fun PortfolioScreen(
                 context.contentResolver.openOutputStream(uri)?.use { out ->
                     out.write(onBuildTemplateCsv().toByteArray(Charsets.UTF_8))
                 }
-                onNotify("Modelo padrão CSV salvo com sucesso.")
+                onNotify("Modelo completo de carteira CSV salvo com sucesso.")
             }.onFailure {
                 onNotify("Erro ao salvar modelo CSV: ${it.localizedMessage ?: "falha de escrita"}")
+            }
+        }
+    }
+
+    val quickUpdateTemplateSaver = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(onBuildQuickUpdateCsv().toByteArray(Charsets.UTF_8))
+                }
+                onNotify("Modelo de atualização (Ativo, Preço, Data, Dividendos) salvo com sucesso.")
+            }.onFailure {
+                onNotify("Erro ao salvar modelo de atualização: ${it.localizedMessage ?: "falha de escrita"}")
             }
         }
     }
@@ -193,7 +210,12 @@ fun PortfolioScreen(
                     FintechCard(borderColor = ElectricCyan.copy(alpha = 0.5f)) {
                         Text("Resultado da Importação: ${importFeedback.fileName}", style = MaterialTheme.typography.titleSmall, color = ElectricCyan)
                         val divTxt = if (importFeedback.dividends.isNotEmpty()) " e ${importFeedback.dividends.size} provento(s)" else ""
-                        Text("${importFeedback.positions.size} posições$divTxt importadas (${importFeedback.fileType}).", style = MaterialTheme.typography.bodySmall)
+                        val summaryText = if (importFeedback.positions.isEmpty() && importFeedback.quickUpdates.isNotEmpty()) {
+                            "${importFeedback.quickUpdates.size} atualização(ões) de ativo/preço/data$divTxt processadas (${importFeedback.fileType})."
+                        } else {
+                            "${importFeedback.positions.size} posições$divTxt importadas (${importFeedback.fileType})."
+                        }
+                        Text(summaryText, style = MaterialTheme.typography.bodySmall)
                         importFeedback.warnings.take(4).forEach { w ->
                             Text("• $w", style = MaterialTheme.typography.bodySmall, color = AmberGold)
                         }
@@ -267,16 +289,29 @@ fun PortfolioScreen(
                         ) {
                             Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("Modelo CSV")
+                            Text("Modelo Carteira")
                         }
                         OutlinedButton(
-                            onClick = { showSpecDialog = true },
-                            modifier = Modifier.weight(1f).testTag("spreadsheet_spec_button")
+                            onClick = {
+                                quickUpdateTemplateSaver.launch("invest_ai_atualizacao_ativo_preco_data_dividendos.csv")
+                            },
+                            modifier = Modifier.weight(1f).testTag("download_quick_update_template_button")
                         ) {
-                            Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("Padrão Colunas")
+                            Text("Modelo Atualização")
                         }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+
+                    OutlinedButton(
+                        onClick = { showSpecDialog = true },
+                        modifier = Modifier.fillMaxWidth().testTag("spreadsheet_spec_button")
+                    ) {
+                        Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Ver Modelos e Padrão de Colunas (Carteira / Atualização)")
                     }
 
                     Spacer(Modifier.height(8.dp))
@@ -454,7 +489,10 @@ fun PortfolioScreen(
     if (showSpecDialog) {
         ImportStandardSpecDialog(
             onDismiss = { showSpecDialog = false },
-            onDownloadTemplate = { templateSaver.launch("invest_ai_modelo_carteira.csv") }
+            onDownloadTemplate = { templateSaver.launch("invest_ai_modelo_carteira.csv") },
+            onDownloadQuickUpdateTemplate = {
+                quickUpdateTemplateSaver.launch("invest_ai_atualizacao_ativo_preco_data_dividendos.csv")
+            }
         )
     }
 

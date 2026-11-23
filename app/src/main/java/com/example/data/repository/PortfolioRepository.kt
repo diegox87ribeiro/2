@@ -167,8 +167,10 @@ class PortfolioRepository(
         return SpreadsheetImporter.importFromUri(context, uri)
     }
 
-    suspend fun commitRealPortfolioImport(result: ImportParseResult) {
-        if (result.positions.isEmpty() && result.dividends.isEmpty()) return
+    suspend fun commitRealPortfolioImport(result: ImportParseResult): Int {
+        if (result.positions.isEmpty() && result.dividends.isEmpty() && result.quickUpdates.isEmpty()) return 0
+        var updatedPositionsCount = 0
+
         if (result.positions.isNotEmpty()) {
             val history = ImportHistoryEntity(
                 fileName = result.fileName,
@@ -181,7 +183,72 @@ class PortfolioRepository(
             )
             portfolioDao.replaceRealPortfolioFromImport(history, result.positions)
             mirrorRealPositionsToAtivos(result.positions)
+            updatedPositionsCount = result.positions.size
+        } else if (result.quickUpdates.isNotEmpty()) {
+            val now = System.currentTimeMillis()
+            val today = SimpleDateFormat("dd/MM/yyyy", Locale("pt", "BR")).format(Date(now))
+            val existingReal = portfolioDao.getPositionsByType(PortfolioType.REAL.name)
+            val byTicker = existingReal.groupBy { it.ticker.trim().uppercase() }
+            val updatedTickers = linkedSetOf<String>()
+
+            result.quickUpdates.forEach { upd ->
+                val cleanTicker = upd.ticker.trim().uppercase()
+                val matches = byTicker[cleanTicker].orEmpty()
+                val dateTag = upd.referenceDate?.takeIf { it.isNotBlank() } ?: today
+                matches.forEach { pos ->
+                    val newPrice = upd.price?.takeIf { it > 0.0 } ?: pos.currentPrice
+                    val newHasPrice = (upd.price != null && upd.price > 0.0) || pos.hasMarketPrice
+                    val newDataCom = upd.dataComDay?.takeIf { it in 1..31 } ?: pos.dataComDay
+                    val changedPriceOrDataCom = (upd.price != null && upd.price > 0.0) || (upd.dataComDay != null)
+                    if (changedPriceOrDataCom) {
+                        portfolioDao.updatePositionById(
+                            id = pos.id,
+                            ticker = pos.ticker,
+                            name = pos.name,
+                            assetClass = pos.assetClass,
+                            quantity = pos.quantity,
+                            averagePrice = pos.averagePrice,
+                            currentPrice = newPrice,
+                            hasMarketPrice = newHasPrice,
+                            sector = pos.sector,
+                            dataComDay = newDataCom,
+                            dataSourceLabel = "Atualização ${result.fileType} ($dateTag)",
+                            updatedAt = now
+                        )
+                        updatedTickers.add(cleanTicker)
+                    }
+                }
+                if (upd.price != null && upd.price > 0.0) {
+                    carteiraLocalRepository.atualizarCotacao(cleanTicker, upd.price)
+                }
+                if (upd.dataComDay != null && upd.dataComDay in 1..31) {
+                    carteiraLocalDao.atualizarDatasDividendoSeAusente(
+                        ticker = cleanTicker,
+                        dataComDia = upd.dataComDay,
+                        dataExDia = null,
+                        atualizadoEm = now
+                    )
+                }
+            }
+
+            if (updatedTickers.isNotEmpty()) {
+                val refreshed = portfolioDao.getPositionsByType(PortfolioType.REAL.name)
+                mirrorRealPositionsToAtivos(refreshed)
+            }
+            updatedPositionsCount = updatedTickers.size
+
+            val history = ImportHistoryEntity(
+                fileName = result.fileName,
+                fileType = "${result.fileType} (Atualização)",
+                recordCount = updatedPositionsCount.coerceAtLeast(result.quickUpdates.size),
+                cashBalanceBrl = result.cashBalanceBrl ?: 0.0,
+                isActiveRealReference = false,
+                isDemoData = false,
+                notes = "Atualização rápida: $updatedPositionsCount ativo(s) atualizado(s) e ${result.dividends.size} provento(s) importado(s)."
+            )
+            portfolioDao.insertImportHistory(history)
         }
+
         if (result.dividends.isNotEmpty()) {
             val existingRefs = portfolioDao.getExistingExternalRefIds().toHashSet()
             val newDivs = result.dividends.filter { it.externalRefId.isBlank() || it.externalRefId !in existingRefs }
@@ -191,6 +258,7 @@ class PortfolioRepository(
             }
         }
         result.cashBalanceBrl?.let { prefs.setCashRealBrl(it) }
+        return updatedPositionsCount
     }
 
     suspend fun importSpreadsheet(uri: Uri): ImportParseResult {
@@ -204,7 +272,7 @@ class PortfolioRepository(
             PortfolioPositionEntity(
                 portfolioType = "REAL", ticker = "ITUB4", name = "Itaú Unibanco PN",
                 assetClass = AssetClass.ACOES_BR.name, quantity = 180.0, averagePrice = 31.50,
-                currentPrice = 35.80, hasMarketPrice = true, sector = "Bancos", dataComDay = 3,
+                currentPrice = 35.80, hasMarketPrice = true, sector = "Bancos", dataComDay = 30,
                 dataSourceLabel = "Demonstração Fictícia", isDemo = true
             ),
             PortfolioPositionEntity(
@@ -556,14 +624,35 @@ class PortfolioRepository(
         }
     }
 
-    suspend fun applyLivePriceToPortfolio(ticker: String, livePrice: Double): Int {
+    suspend fun applyLivePriceToPortfolio(
+        ticker: String,
+        livePrice: Double,
+        liveDataComDay: Int? = null,
+        liveDataExDay: Int? = null
+    ): Int {
         if (livePrice <= 0.0) return 0
         val cleanTicker = ticker.trim().uppercase()
+        val now = System.currentTimeMillis()
         carteiraLocalRepository.atualizarCotacao(cleanTicker, livePrice)
+        if (liveDataComDay != null || liveDataExDay != null) {
+            carteiraLocalDao.atualizarDatasDividendoSeAusente(
+                ticker = cleanTicker,
+                dataComDia = liveDataComDay?.takeIf { it in 1..31 },
+                dataExDia = liveDataExDay?.takeIf { it in 1..31 },
+                atualizadoEm = now
+            )
+        }
+        if (liveDataComDay != null && liveDataComDay in 1..31) {
+            portfolioDao.updateDataComIfMissingByTicker(
+                ticker = cleanTicker,
+                dataComDay = liveDataComDay,
+                updatedAt = now
+            )
+        }
         return portfolioDao.updateCurrentPriceByTicker(
             ticker = cleanTicker,
             currentPrice = livePrice,
-            updatedAt = System.currentTimeMillis()
+            updatedAt = now
         )
     }
 

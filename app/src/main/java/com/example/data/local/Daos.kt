@@ -71,6 +71,20 @@ interface PortfolioDao {
         updatedAt: Long = System.currentTimeMillis()
     ): Int
 
+    @Query(
+        """
+        UPDATE portfolio_positions
+        SET dataComDay = :dataComDay,
+            updatedAt = :updatedAt
+        WHERE UPPER(ticker) = UPPER(:ticker) AND dataComDay IS NULL
+        """
+    )
+    suspend fun updateDataComIfMissingByTicker(
+        ticker: String,
+        dataComDay: Int,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
     @Query("DELETE FROM portfolio_positions WHERE id = :id")
     suspend fun deletePositionById(id: Long)
 

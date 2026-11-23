@@ -133,7 +133,7 @@ object DividendDateAlertEvaluator {
     }
 
     internal fun nextMonthlyOccurrence(todayStart: Calendar, targetDay: Int): Calendar {
-        val thisMonth = buildClampedDate(
+        val thisMonth = buildB3AdjustedDate(
             year = todayStart.get(Calendar.YEAR),
             month = todayStart.get(Calendar.MONTH),
             day = targetDay
@@ -145,7 +145,7 @@ object DividendDateAlertEvaluator {
             set(Calendar.DAY_OF_MONTH, 1)
             add(Calendar.MONTH, 1)
         }
-        return buildClampedDate(
+        return buildB3AdjustedDate(
             year = nextMonthBase.get(Calendar.YEAR),
             month = nextMonthBase.get(Calendar.MONTH),
             day = targetDay
@@ -154,13 +154,13 @@ object DividendDateAlertEvaluator {
 
     internal fun nextDataExFromDataCom(todayStart: Calendar, dataComDay: Int): Calendar {
         // Verifica ciclo do mês anterior, mês atual e próximo mês para não perder Data-Ex
-        // logo após uma Data-Com no fim do mês (ex.: Data-Com dia 30/31 -> Data-Ex dia 1..3)
+        // logo após uma Data-Com no fim do mês (ex.: Data-Com dia 30/10 -> Finados 02/11 -> Data-Ex 03/11)
         val candidates = (-1..1).map { monthOffset ->
             val base = (todayStart.clone() as Calendar).apply {
                 set(Calendar.DAY_OF_MONTH, 1)
                 add(Calendar.MONTH, monthOffset)
             }
-            val comDate = buildClampedDate(
+            val comDate = buildB3AdjustedDate(
                 year = base.get(Calendar.YEAR),
                 month = base.get(Calendar.MONTH),
                 day = dataComDay
@@ -174,16 +174,12 @@ object DividendDateAlertEvaluator {
     }
 
     internal fun nextBusinessDayAfter(date: Calendar): Calendar {
-        val next = (date.clone() as Calendar).apply {
-            add(Calendar.DAY_OF_YEAR, 1)
-        }
-        while (
-            next.get(Calendar.DAY_OF_WEEK) == Calendar.SATURDAY ||
-            next.get(Calendar.DAY_OF_WEEK) == Calendar.SUNDAY
-        ) {
-            next.add(Calendar.DAY_OF_YEAR, 1)
-        }
-        return startOfDayCalendar(next.timeInMillis)
+        return B3CalendarUtils.nextB3BusinessDayAfter(date)
+    }
+
+    internal fun buildB3AdjustedDate(year: Int, month: Int, day: Int): Calendar {
+        val raw = buildClampedDate(year = year, month = month, day = day)
+        return B3CalendarUtils.adjustToPreviousOrSameB3BusinessDay(raw)
     }
 
     private fun buildClampedDate(year: Int, month: Int, day: Int): Calendar {

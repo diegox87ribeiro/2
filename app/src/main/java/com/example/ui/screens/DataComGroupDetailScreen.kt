@@ -60,20 +60,30 @@ fun DataComGroupDetailScreen(
 ) {
     var inspectedMarketAsset by remember { mutableStateOf<MarketAsset?>(null) }
 
-    val catalogAssetsInGroup = remember(state.marketAssets, group) {
-        state.marketAssets
-            .filter { it.dataComGroup == group }
-            .sortedWith(compareBy<MarketAsset> { it.dataComDay ?: 99 }.thenBy { it.ticker })
-    }
-
-    val realPositionsInGroup = remember(state.realPositions, group) {
-        state.realPositions
-            .filter { DataComGroup.fromDay(it.dataComDay) == group }
-            .sortedWith(compareBy<com.example.domain.model.PortfolioItemView> { it.dataComDay ?: 99 }.thenBy { it.ticker })
-    }
-
     val realPositionsByTicker = remember(state.realPositions) {
-        state.realPositions.associateBy { it.ticker.uppercase() }
+        state.realPositions.associateBy { it.ticker.trim().uppercase() }
+    }
+
+    val catalogAssetsInGroup = remember(state.marketAssets, realPositionsByTicker, group) {
+        state.marketAssets
+            .filter { asset ->
+                val effectiveDay = realPositionsByTicker[asset.ticker.trim().uppercase()]?.dataComDay ?: asset.dataComDay
+                DataComGroup.fromDay(effectiveDay) == group
+            }
+            .sortedWith(compareBy<MarketAsset> {
+                realPositionsByTicker[it.ticker.trim().uppercase()]?.dataComDay ?: it.dataComDay ?: 99
+            }.thenBy { it.ticker })
+    }
+
+    val realPositionsInGroup = remember(state.realPositions, state.liveQuotesByTicker, state.marketAssets, group) {
+        val marketByTicker = state.marketAssets.associateBy { it.ticker.trim().uppercase() }
+        state.realPositions
+            .filter { pos ->
+                val upper = pos.ticker.trim().uppercase()
+                val effectiveDay = pos.dataComDay ?: state.liveQuotesByTicker[upper]?.dataComDay ?: marketByTicker[upper]?.dataComDay
+                DataComGroup.fromDay(effectiveDay) == group
+            }
+            .sortedWith(compareBy<com.example.domain.model.PortfolioItemView> { it.dataComDay ?: 99 }.thenBy { it.ticker })
     }
 
     val projectedDividendGroupBrl = remember(catalogAssetsInGroup, realPositionsByTicker) {

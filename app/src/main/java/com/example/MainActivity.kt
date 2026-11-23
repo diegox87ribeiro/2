@@ -82,6 +82,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // STEP 1: Configure Firebase App Check immediately with launch Intent before any UI, ViewModels, or Firebase calls
+        val safeOfflineMode = intent?.getBooleanExtra(EXTRA_SAFE_OFFLINE, false) == true
+        if (!safeOfflineMode) {
+            configureAppCheck(this, intent)
+        }
+
         CrashReporter.install(this)
 
         val previousCrashTrace = CrashReporter.consumeLastCrash(this)
@@ -90,12 +97,7 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        val safeOfflineMode = intent?.getBooleanExtra(EXTRA_SAFE_OFFLINE, false) == true
-
         try {
-            if (!safeOfflineMode) {
-                runCatching { configureAppCheck(this, intent) }
-            }
             runCatching {
                 enableEdgeToEdge(
                     statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
@@ -118,6 +120,15 @@ class MainActivity : ComponentActivity() {
         } catch (t: Throwable) {
             val formatted = CrashReporter.recordCrash(this, t)
             showNativeCrashDiagnosticView(formatted)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val safeOfflineMode = intent.getBooleanExtra(EXTRA_SAFE_OFFLINE, false)
+        if (!safeOfflineMode && !intent.getStringExtra("FIREBASE_APPCHECK_DEBUG_TOKEN").isNullOrBlank()) {
+            configureAppCheck(this, intent)
         }
     }
 

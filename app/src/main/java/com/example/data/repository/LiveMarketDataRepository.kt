@@ -1,6 +1,7 @@
 package com.example.data.repository
 
 import com.example.domain.model.AssetClass
+import com.example.domain.model.B3CalendarUtils
 import com.example.domain.model.LiveMarketQuote
 import com.example.domain.model.MarketAsset
 import com.example.domain.model.MarketQuoteProvider
@@ -48,6 +49,7 @@ data class PartialQuoteResult(
     val dividendConsistencyMonths: Int? = null,
     val dataComDay: Int? = null,
     val dataExDay: Int? = null,
+    val derivedDataComFromExDay: Int? = null,
     val paymentDay: Int? = null,
     val marketTimestampLabel: String? = null
 )
@@ -219,11 +221,13 @@ object LiveQuoteParsers {
             // Yahoo Finance para tickers .SA publica a DATA-EX (primeiro pregão sem direito ao dividendo,
             // ex.: SMRE11 dia 03 do mês seguinte após feriado/fim de semana), e NÃO a Data-Com oficial (dia 30).
             // Portanto registramos explicitamente em dataExDay e mantemos dataComDay = null.
-            val yahooDataExDay = sortedDivsDesc.firstOrNull()?.first?.let { exSec ->
+            val latestExSec = sortedDivsDesc.firstOrNull()?.first
+            val yahooDataExDay = latestExSec?.let { exSec ->
                 Calendar.getInstance(spTz).apply { timeInMillis = exSec * 1000L }
                     .get(Calendar.DAY_OF_MONTH)
                     .takeIf { it in 1..31 }
             }
+            val derivedDataComDay = latestExSec?.let { B3CalendarUtils.deriveDataComDayFromExEpochSeconds(it) }
 
             PartialQuoteResult(
                 sourceName = MarketQuoteProvider.YAHOO_B3.displayName,
@@ -247,6 +251,7 @@ object LiveQuoteParsers {
                 dividendConsistencyMonths = distinctMonths,
                 dataComDay = null,
                 dataExDay = yahooDataExDay,
+                derivedDataComFromExDay = derivedDataComDay,
                 marketTimestampLabel = formattedTime
             )
         }.getOrNull()
@@ -277,7 +282,33 @@ object LiveQuoteParsers {
             val name = obj.optString("longName").takeIf { it.isNotBlank() }
                 ?: obj.optString("shortName").takeIf { it.isNotBlank() }
 
-            if (price == null && pe == null && pb == null && dy == null && mCap == null) return null
+            val cashDivsArr = obj.optJSONObject("dividendsData")?.optJSONArray("cashDividends")
+            data class BrapiDivEvent(val sortKey: Long, val dataComDay: Int?, val paymentDay: Int?, val rate: Double)
+            val brapiDivEvents = mutableListOf<BrapiDivEvent>()
+            if (cashDivsArr != null) {
+                for (i in 0 until cashDivsArr.length()) {
+                    val divObj = cashDivsArr.optJSONObject(i) ?: continue
+                    val rate = divObj.optDouble("rate").takeIf { !it.isNaN() && it > 0.0 } ?: continue
+                    val lastDatePrior = divObj.optString("lastDatePrior").takeIf { it.isNotBlank() && it != "null" }
+                    val payDate = divObj.optString("paymentDate").takeIf { it.isNotBlank() && it != "null" }
+                    val approvedOn = divObj.optString("approvedOn").takeIf { it.isNotBlank() && it != "null" }
+                    val parsedCom = parseIsoDateParts(lastDatePrior)
+                    val parsedPay = parseIsoDateParts(payDate)
+                    val sortKey = parsedCom?.first ?: parseIsoDateParts(approvedOn)?.first ?: parsedPay?.first ?: 0L
+                    brapiDivEvents.add(
+                        BrapiDivEvent(
+                            sortKey = sortKey,
+                            dataComDay = parsedCom?.second,
+                            paymentDay = parsedPay?.second,
+                            rate = rate
+                        )
+                    )
+                }
+            }
+            val sortedBrapiDivs = brapiDivEvents.sortedByDescending { it.sortKey }
+            val brapiLatestDiv = sortedBrapiDivs.firstOrNull()
+
+            if (price == null && pe == null && pb == null && dy == null && mCap == null && brapiLatestDiv == null) return null
 
             PartialQuoteResult(
                 sourceName = MarketQuoteProvider.BRAPI.displayName,
@@ -295,7 +326,12 @@ object LiveQuoteParsers {
                 priceToEarnings = pe,
                 priceToBook = pb,
                 dividendYield12m = dy,
-                marketCapBrl = mCap
+                marketCapBrl = mCap,
+                lastDividendBrl = brapiLatestDiv?.rate,
+                dividendHistory6m = sortedBrapiDivs.take(6).reversed().map { it.rate },
+                dividendConsistencyMonths = sortedBrapiDivs.size.coerceIn(0, 12).takeIf { sortedBrapiDivs.isNotEmpty() },
+                dataComDay = brapiLatestDiv?.dataComDay,
+                paymentDay = brapiLatestDiv?.paymentDay
             )
         }.getOrNull()
     }
@@ -364,22 +400,49 @@ object LiveQuoteParsers {
                 valuePattern = """([+-]?[0-9.,]+)\s*%"""
             )?.takeIf { it in -200.0..200.0 }
 
-            // Tabela de Proventos do Investidor10: Tipo | Data com | Pagamento | Valor
-            // Tolera tags inline (<span>/<a>) e valores com ou sem prefixo "R$".
-            val divRowRegex = Regex(
+            // Tabela de Proventos do Investidor10:
+            // Suporta ambos os layouts conhecidos:
+            // (A) Tipo | Data Com | Pagamento (ou "-"/"A definir") | Valor
+            // (B) Tipo | Valor | Data Com | Pagamento (ou "-"/"A definir")
+            // Ordena todas as linhas pela Data-Com mais recente (yyyyMMdd desc) para nunca retornar datas antigas.
+            data class Inv10DivRow(val sortKey: Long, val dataComDay: Int, val paymentDay: Int?, val amount: Double)
+            val extractedRows = mutableListOf<Inv10DivRow>()
+
+            val layoutARegex = Regex(
                 """(?:Dividendos?|Rendimentos?|Proventos?|JCP|JSCP|Juros[^<]{0,28}|Amortiza[cç][aã]o)\s*(?:<[^>]+>\s*)*</t[dh]>\s*""" +
                     """<t[dh][^>]*>(?:\s*<[^>]+>)*\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4})\s*(?:<[^>]+>\s*)*</t[dh]>\s*""" +
-                    """<t[dh][^>]*>(?:\s*<[^>]+>)*\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4})\s*(?:<[^>]+>\s*)*</t[dh]>\s*""" +
+                    """<t[dh][^>]*>(?:\s*<[^>]+>)*\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4}|-|A\s*definir|N/A)?\s*(?:<[^>]+>\s*)*</t[dh]>\s*""" +
                     """<t[dh][^>]*>(?:\s*<[^>]+>)*\s*(?:R\$\s*)?([0-9]+,[0-9]{2,6}|[0-9]+\.[0-9]{2,6})""",
                 RegexOption.IGNORE_CASE
             )
-            val divMatches = divRowRegex.findAll(cleanHtml).toList()
-            val firstRow = divMatches.firstOrNull()
-            val dataComDay = firstRow?.groupValues?.getOrNull(1)?.substringBefore("/")?.toIntOrNull()?.takeIf { it in 1..31 }
-            val paymentDay = firstRow?.groupValues?.getOrNull(2)?.substringBefore("/")?.toIntOrNull()?.takeIf { it in 1..31 }
-            val parsedDividends = divMatches.mapNotNull { m ->
-                m.groupValues.getOrNull(3)?.let(::parseFlexibleDecimal)?.takeIf { it > 0.0 }
+            layoutARegex.findAll(cleanHtml).forEach { m ->
+                val comParts = parseBrDateParts(m.groupValues.getOrNull(1)) ?: return@forEach
+                val payParts = parseBrDateParts(m.groupValues.getOrNull(2))
+                val amount = m.groupValues.getOrNull(3)?.let(::parseFlexibleDecimal)?.takeIf { it > 0.0 } ?: return@forEach
+                extractedRows.add(Inv10DivRow(comParts.first, comParts.second, payParts?.second, amount))
             }
+
+            if (extractedRows.isEmpty()) {
+                val layoutBRegex = Regex(
+                    """(?:Dividendos?|Rendimentos?|Proventos?|JCP|JSCP|Juros[^<]{0,28}|Amortiza[cç][aã]o)\s*(?:<[^>]+>\s*)*</t[dh]>\s*""" +
+                        """<t[dh][^>]*>(?:\s*<[^>]+>)*\s*(?:R\$\s*)?([0-9]+,[0-9]{2,6}|[0-9]+\.[0-9]{2,6})\s*(?:<[^>]+>\s*)*</t[dh]>\s*""" +
+                        """<t[dh][^>]*>(?:\s*<[^>]+>)*\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4})\s*(?:<[^>]+>\s*)*</t[dh]>\s*""" +
+                        """<t[dh][^>]*>(?:\s*<[^>]+>)*\s*([0-9]{2}/[0-9]{2}/[0-9]{2,4}|-|A\s*definir|N/A)?""",
+                    RegexOption.IGNORE_CASE
+                )
+                layoutBRegex.findAll(cleanHtml).forEach { m ->
+                    val amount = m.groupValues.getOrNull(1)?.let(::parseFlexibleDecimal)?.takeIf { it > 0.0 } ?: return@forEach
+                    val comParts = parseBrDateParts(m.groupValues.getOrNull(2)) ?: return@forEach
+                    val payParts = parseBrDateParts(m.groupValues.getOrNull(3))
+                    extractedRows.add(Inv10DivRow(comParts.first, comParts.second, payParts?.second, amount))
+                }
+            }
+
+            val sortedRows = extractedRows.sortedByDescending { it.sortKey }
+            val latestRow = sortedRows.firstOrNull()
+            val dataComDay = latestRow?.dataComDay
+            val paymentDay = latestRow?.paymentDay ?: sortedRows.firstNotNullOfOrNull { it.paymentDay }
+            val parsedDividends = sortedRows.map { it.amount }
 
             if (price == null && dy12m == null && pvp == null && parsedDividends.isEmpty()) {
                 return null
@@ -400,6 +463,27 @@ object LiveQuoteParsers {
                 paymentDay = paymentDay
             )
         }.getOrNull()
+    }
+
+    private fun parseBrDateParts(raw: String?): Pair<Long, Int>? {
+        val text = raw?.trim() ?: return null
+        val match = Regex("""^(\d{2})/(\d{2})/(\d{2,4})$""").find(text) ?: return null
+        val day = match.groupValues[1].toIntOrNull()?.takeIf { it in 1..31 } ?: return null
+        val month = match.groupValues[2].toIntOrNull()?.takeIf { it in 1..12 } ?: return null
+        val rawYear = match.groupValues[3].toIntOrNull() ?: return null
+        val year = if (rawYear < 100) 2000 + rawYear else rawYear
+        val sortKey = (year.toLong() * 10000L) + (month.toLong() * 100L) + day.toLong()
+        return sortKey to day
+    }
+
+    private fun parseIsoDateParts(raw: String?): Pair<Long, Int>? {
+        val text = raw?.trim() ?: return null
+        val match = Regex("""^(\d{4})-(\d{2})-(\d{2})""").find(text) ?: return null
+        val year = match.groupValues[1].toIntOrNull() ?: return null
+        val month = match.groupValues[2].toIntOrNull()?.takeIf { it in 1..12 } ?: return null
+        val day = match.groupValues[3].toIntOrNull()?.takeIf { it in 1..31 } ?: return null
+        val sortKey = (year.toLong() * 10000L) + (month.toLong() * 100L) + day.toLong()
+        return sortKey to day
     }
 
     private fun extractInvestidor10CardDecimal(
@@ -524,12 +608,14 @@ class LiveMarketDataRepository(
                 val consulted = partials.map { it.sourceName }.distinct()
                 val company = partials.firstNotNullOfOrNull { it.companyName } ?: ticker
 
-                // Prioriza dados de proventos reais (Investidor10 para Data-Com oficial; Yahoo Finance apenas para Data-Ex)
-                val divOrdered = listOfNotNull(inv10Res, yahooRes, brapiRes)
+                // Prioriza dados oficiais de Data-Com (Investidor10 > Brapi lastDatePrior > dia útil B3 anterior à Data-Ex do Yahoo)
+                val divOrdered = listOfNotNull(inv10Res, brapiRes, yahooRes)
                 val bestLastDividend = divOrdered.firstNotNullOfOrNull { it.lastDividendBrl }
                 val bestDivHistory = divOrdered.firstOrNull { it.dividendHistory6m.isNotEmpty() }?.dividendHistory6m.orEmpty()
                 val bestDivConsistency = divOrdered.firstNotNullOfOrNull { it.dividendConsistencyMonths }
-                val bestDataComDay = listOfNotNull(inv10Res, brapiRes).firstNotNullOfOrNull { it.dataComDay }
+                val bestDataComDay = inv10Res?.dataComDay
+                    ?: brapiRes?.dataComDay
+                    ?: yahooRes?.derivedDataComFromExDay
                 val bestDataExDay = yahooRes?.dataExDay
                 val bestPaymentDay = divOrdered.firstNotNullOfOrNull { it.paymentDay }
                 val bestDy12m = (inv10Res?.dividendYield12m

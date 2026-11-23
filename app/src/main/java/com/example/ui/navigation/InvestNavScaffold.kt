@@ -506,6 +506,7 @@ private fun MainScaffoldBody(
                             onSelectType = viewModel::selectPortfolioType, onImportUri = viewModel::previewSpreadsheetImport,
                             onConfirmPendingImport = viewModel::confirmPendingImport, onDismissPendingImport = viewModel::dismissPendingImport,
                             onDismissImportFeedback = viewModel::clearImportFeedback, onBuildTemplateCsv = viewModel::buildStandardCsvTemplate,
+                            onBuildQuickUpdateCsv = viewModel::buildQuickUpdateCsvTemplate,
                             onBuildPortfolioCsv = viewModel::buildPortfolioCsvExport, onNotify = viewModel::notifyMessage,
                             onLoadDemoReal = viewModel::loadDemoRealPortfolio, onClearPortfolio = viewModel::clearPortfolio,
                             onAddManualPosition = viewModel::addManualPosition, onUpdatePosition = viewModel::updatePosition,

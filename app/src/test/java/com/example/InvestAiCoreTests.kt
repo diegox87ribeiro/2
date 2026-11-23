@@ -929,6 +929,86 @@ class InvestAiCoreTests {
         assertEquals(5, upcomingWithin5Days.first().daysUntil)
         assertEquals(6.0, upcomingWithin5Days.first().projectedDividendBrl, 0.01)
     }
+
+    @Test
+    fun `b3 calendar adjusts weekend Data-Com to previous business day, skips Finados holiday for Data-Ex, and parses full CSV dates`() {
+        // 30/05/2026 é sábado -> Data-Com B3 deve recuar para sexta-feira 29/05/2026
+        val refMay2026 = java.util.Calendar.getInstance().apply {
+            set(2026, java.util.Calendar.MAY, 25, 9, 0, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val mayCom = com.example.domain.model.DividendDateAlertEvaluator.nextMonthlyOccurrence(refMay2026, 30)
+        assertEquals(29, mayCom.get(java.util.Calendar.DAY_OF_MONTH))
+        assertEquals(java.util.Calendar.MAY, mayCom.get(java.util.Calendar.MONTH))
+
+        // 30/10/2026 (sexta) -> 31/10 (sáb), 01/11 (dom), 02/11 (Finados) -> Data-Ex 03/11/2026 (terça)
+        val refOct2026 = java.util.Calendar.getInstance().apply {
+            set(2026, java.util.Calendar.OCTOBER, 29, 9, 0, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val novEx = com.example.domain.model.DividendDateAlertEvaluator.nextDataExFromDataCom(refOct2026, 30)
+        assertEquals(3, novEx.get(java.util.Calendar.DAY_OF_MONTH))
+        assertEquals(java.util.Calendar.NOVEMBER, novEx.get(java.util.Calendar.MONTH))
+
+        // Planilha com datas completas na coluna Data-Com
+        assertEquals(30, SpreadsheetImporter.parseDataComDay("30/10/2026"))
+        assertEquals(30, SpreadsheetImporter.parseDataComDay("2026-10-30"))
+        assertEquals(18, SpreadsheetImporter.parseDataComDay("Dia 18"))
+        assertEquals(null, SpreadsheetImporter.parseDataComDay(""))
+
+        // Catálogo corrigido (sem datas fictícias para ações trimestrais e ITUB4/RURA11 no último dia útil)
+        val byTicker = MarketCatalogRepository.catalogAssets.associateBy { it.ticker }
+        assertEquals(30, byTicker["ITUB4"]?.dataComDay)
+        assertEquals(30, byTicker["RURA11"]?.dataComDay)
+        assertEquals(18, byTicker["XPML11"]?.dataComDay)
+        assertEquals(12, byTicker["VGIA11"]?.dataComDay)
+        assertEquals(null, byTicker["BBAS3"]?.dataComDay)
+        assertEquals(null, byTicker["TAEE11"]?.dataComDay)
+        assertEquals(null, byTicker["WEGE3"]?.dataComDay)
+        assertEquals(null, byTicker["EGIE3"]?.dataComDay)
+    }
+
+    @Test
+    fun `quick update csv template and minimal Ativo Preco Data Dividendos table parse cleanly`() {
+        val template = SpreadsheetImporter.generateQuickUpdateCsvTemplate()
+        val templateParsed = SpreadsheetImporter.parseCsv("invest_ai_atualizacao.csv", template)
+
+        assertTrue(templateParsed.positions.isEmpty())
+        assertEquals(5, templateParsed.quickUpdates.size)
+        assertEquals(4, templateParsed.dividends.size)
+        val itub = templateParsed.quickUpdates.first { it.ticker == "ITUB4" }
+        assertEquals(36.40, itub.price ?: 0.0, 0.001)
+        assertEquals(30, itub.dataComDay)
+        assertEquals(28.40, itub.dividendAmount ?: 0.0, 0.001)
+
+        // Tabela mínima exatamente com as 4 colunas solicitadas: Ativo;Preço;Data;Dividendos
+        val minimalCsv = """
+            Ativo;Preço;Data;Dividendos
+            ITUB4;37,15;23/11/2026;32,50
+            HGLG11;158,90;23/11/2026;
+            MXRF11;;14/11/2026;19,20
+        """.trimIndent()
+        val parsed = SpreadsheetImporter.parseCsv("atualizacao_mensal.csv", minimalCsv)
+        assertTrue(parsed.positions.isEmpty())
+        assertEquals(3, parsed.quickUpdates.size)
+        assertEquals(2, parsed.dividends.size)
+
+        val rowItub = parsed.quickUpdates.first { it.ticker == "ITUB4" }
+        assertEquals(37.15, rowItub.price ?: 0.0, 0.001)
+        assertEquals("23/11/2026", rowItub.referenceDate)
+        assertEquals(32.50, rowItub.dividendAmount ?: 0.0, 0.001)
+
+        val rowHglg = parsed.quickUpdates.first { it.ticker == "HGLG11" }
+        assertEquals(158.90, rowHglg.price ?: 0.0, 0.001)
+        assertEquals("23/11/2026", rowHglg.referenceDate)
+        assertEquals(null, rowHglg.dividendAmount)
+
+        val rowMxrf = parsed.quickUpdates.first { it.ticker == "MXRF11" }
+        assertEquals(null, rowMxrf.price)
+        assertEquals("14/11/2026", rowMxrf.referenceDate)
+        assertEquals(19.20, rowMxrf.dividendAmount ?: 0.0, 0.001)
+        assertEquals("14/11/2026", parsed.dividends.first { it.ticker == "MXRF11" }.dateIso)
+    }
 }
 
 

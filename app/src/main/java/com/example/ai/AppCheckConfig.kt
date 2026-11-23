@@ -63,7 +63,17 @@ fun configureAppCheck(context: Context, intent: Intent?) {
                 Log.e(TAG, "reCAPTCHA site key não encontrada nos recursos.")
             }
         }
-    } catch (t: Throwable) {
-        Log.e(TAG, "Falha ao inicializar Firebase App Check", t)
+    } catch (e: Exception) {
+        Log.e(TAG, "Falha ao inicializar Firebase App Check", e)
+    }
+}
+
+fun formatFirebaseAiError(error: Throwable, fallback: String): String {
+    val raw = error.localizedMessage?.takeIf { it.isNotBlank() } ?: fallback
+    val lower = raw.lowercase()
+    return if (lower.contains("app check") || lower.contains("appcheck") || lower.contains("403")) {
+        "$raw\n\nDica App Check: confirme que o app foi aberto pelo ambiente configurado com token de depuração (ou build Release com reCAPTCHA Enterprise válido) e tente novamente."
+    } else {
+        raw
     }
 }

@@ -271,4 +271,57 @@ class MarketAndProfitParsersRobolectricTest {
         assertEquals(30, mergedNew.dataComDay)
         assertEquals(com.example.domain.model.DataComGroup.G4, mergedNew.dataComGroup)
     }
+
+    @Test
+    fun `parsers extract newest Data-Com from Brapi cashDividends, Investidor10 alternate layouts and B3 holiday fallback`() {
+        val brapiJson = """
+            {
+              "results": [{
+                "symbol": "SMRE11",
+                "shortName": "FII SMART REAL ESTATE",
+                "regularMarketPrice": 56.30,
+                "dividendsData": {
+                  "cashDividends": [
+                    { "rate": 0.90, "lastDatePrior": "2026-09-30T00:00:00.000Z", "paymentDate": "2026-10-15T00:00:00.000Z" },
+                    { "rate": 1.00, "lastDatePrior": "2026-10-30T00:00:00.000Z", "paymentDate": "2026-11-16T00:00:00.000Z" }
+                  ]
+                }
+              }]
+            }
+        """.trimIndent()
+        val parsedBrapi = LiveQuoteParsers.parseBrapiQuoteJson("SMRE11", brapiJson)!!
+        assertEquals(30, parsedBrapi.dataComDay)
+        assertEquals(16, parsedBrapi.paymentDay)
+        assertEquals(1.00, parsedBrapi.lastDividendBrl!!, 0.001)
+
+        // Investidor10 fora de ordem cronológica + pagamento ainda "-" ("A definir")
+        val inv10OutOfOrderHtml = """
+            <table>
+              <tr><td>Rendimento</td><td>30/09/2026</td><td>15/10/2026</td><td>R$ 0,95</td></tr>
+              <tr><td>Rendimento</td><td>30/10/2026</td><td>-</td><td>R$ 1,05</td></tr>
+            </table>
+        """.trimIndent()
+        val parsedInv10A = LiveQuoteParsers.parseInvestidor10Html("SMRE11", inv10OutOfOrderHtml)!!
+        assertEquals(30, parsedInv10A.dataComDay)
+        assertEquals(15, parsedInv10A.paymentDay)
+        assertEquals(1.05, parsedInv10A.lastDividendBrl!!, 0.001)
+
+        // Investidor10 layout alternativo: Tipo | Valor | Data Com | Pagamento
+        val inv10LayoutBHtml = """
+            <table>
+              <tr><td>Rendimento</td><td>R$ 0,92</td><td>18/09/2026</td><td>25/09/2026</td></tr>
+            </table>
+        """.trimIndent()
+        val parsedInv10B = LiveQuoteParsers.parseInvestidor10Html("XPML11", inv10LayoutBHtml)!!
+        assertEquals(18, parsedInv10B.dataComDay)
+        assertEquals(25, parsedInv10B.paymentDay)
+        assertEquals(0.92, parsedInv10B.lastDividendBrl!!, 0.001)
+
+        // Yahoo Data-Ex 03/11/2026 (Terça após Finados 02/11) -> Data-Com B3 derivada = 30/10/2026 (Sexta, dia 30)
+        val exNov03_2026 = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("America/Sao_Paulo")).apply {
+            set(2026, java.util.Calendar.NOVEMBER, 3, 10, 0, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis / 1000L
+        assertEquals(30, com.example.domain.model.B3CalendarUtils.deriveDataComDayFromExEpochSeconds(exNov03_2026))
+    }
 }

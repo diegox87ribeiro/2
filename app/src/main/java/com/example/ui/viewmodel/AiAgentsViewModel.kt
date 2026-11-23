@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.ai.formatFirebaseAiError
 import com.example.data.local.ChatMessageEntity
 import com.example.data.local.InvestDatabase
 import com.example.data.local.SavedAiRecommendationEntity
@@ -260,7 +261,7 @@ class AiAgentsViewModel(application: Application) : AndroidViewModel(application
             } catch (e: Exception) {
                 Log.e(TAG, "Gemini audio transcription failed", e)
                 _audioUiState.value = AiAudioUiState.Error(
-                    e.localizedMessage ?: "Falha ao transcrever o áudio gravado."
+                    formatFirebaseAiError(e, "Falha ao transcrever o áudio gravado.")
                 )
             }
         }
@@ -309,7 +310,7 @@ class AiAgentsViewModel(application: Application) : AndroidViewModel(application
             } catch (e: Exception) {
                 Log.e(TAG, "Gemini voice conversation failed", e)
                 _audioUiState.value = AiAudioUiState.Error(
-                    e.localizedMessage ?: "Falha na conversa por voz com o Gemini."
+                    formatFirebaseAiError(e, "Falha na conversa por voz com o Gemini.")
                 )
             }
         }
@@ -419,7 +420,7 @@ class AiAgentsViewModel(application: Application) : AndroidViewModel(application
         } catch (e: Exception) {
             Log.e(TAG, "Gemini multi-turn chat failed", e)
             _chatUiState.value = AiChatUiState.Error(
-                e.localizedMessage ?: "Falha ao conversar com o Gemini."
+                formatFirebaseAiError(e, "Falha ao conversar com o Gemini.")
             )
             null
         }
@@ -485,7 +486,7 @@ class AiAgentsViewModel(application: Application) : AndroidViewModel(application
             } catch (e: Exception) {
                 Log.e(TAG, "Firebase AI generation failed", e)
                 _uiState.value = AiAgentUiState.Error(
-                    e.localizedMessage ?: "Falha ao executar análise estruturada com Gemini."
+                    formatFirebaseAiError(e, "Falha ao executar análise estruturada com Gemini.")
                 )
             }
         }
@@ -539,7 +540,7 @@ class AiAgentsViewModel(application: Application) : AndroidViewModel(application
             } catch (e: Exception) {
                 Log.e(TAG, "Consolidated 3-agent run failed", e)
                 _consolidatedRunState.value = ConsolidatedRunState.Error(
-                    e.localizedMessage ?: "Erro ao consolidar pareceres dos 3 agentes."
+                    formatFirebaseAiError(e, "Erro ao consolidar pareceres dos 3 agentes.")
                 )
             }
         }

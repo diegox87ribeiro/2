@@ -283,12 +283,12 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                 val result = withContext(Dispatchers.IO) {
                     repository.parseSpreadsheetPreview(uri)
                 }
-                if (result.positions.isNotEmpty() || result.dividends.isNotEmpty()) {
+                if (result.positions.isNotEmpty() || result.dividends.isNotEmpty() || result.quickUpdates.isNotEmpty()) {
                     _pendingImportPreview.value = result
                 } else {
                     _importFeedback.value = result
                     _statusBannerMessage.value = result.warnings.firstOrNull()
-                        ?: "Nenhum ativo ou dividendo válido encontrado na planilha."
+                        ?: "Nenhum ativo, preço ou dividendo válido encontrado na planilha."
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -302,14 +302,17 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         val pending = _pendingImportPreview.value ?: return
         viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) {
+                val updatedCount = withContext(Dispatchers.IO) {
                     repository.commitRealPortfolioImport(pending)
                 }
                 _pendingImportPreview.value = null
                 _importFeedback.value = pending
                 val divSuffix = if (pending.dividends.isNotEmpty()) " e ${pending.dividends.size} provento(s)" else ""
-                _statusBannerMessage.value =
+                _statusBannerMessage.value = if (pending.positions.isEmpty() && pending.quickUpdates.isNotEmpty()) {
+                    "Atualização '${pending.fileName}' aplicada: $updatedCount ativo(s) atualizado(s)$divSuffix."
+                } else {
                     "Importação '${pending.fileName}' (${pending.positions.size} ativos$divSuffix) salva na Carteira Real."
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -323,6 +326,9 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun buildStandardCsvTemplate(): String = SpreadsheetImporter.generateStandardCsvTemplate()
+
+    fun buildQuickUpdateCsvTemplate(): String =
+        SpreadsheetImporter.generateQuickUpdateCsvTemplate(dashboardState.value.realPositions)
 
     fun buildPortfolioCsvExport(type: PortfolioType): String {
         val st = dashboardState.value
@@ -624,7 +630,12 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         val live = dashboardState.value.liveQuotesByTicker[clean] ?: _liveQuotesByTicker.value[clean] ?: return
         viewModelScope.launch {
             val updatedCount = withContext(Dispatchers.IO) {
-                repository.applyLivePriceToPortfolio(clean, live.price)
+                repository.applyLivePriceToPortfolio(
+                    ticker = clean,
+                    livePrice = live.price,
+                    liveDataComDay = live.dataComDay,
+                    liveDataExDay = live.dataExDay
+                )
             }
             _statusBannerMessage.value = if (updatedCount > 0) {
                 "Cotação ao vivo de $clean aplicada na Carteira."
@@ -656,7 +667,12 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                     withContext(Dispatchers.IO) {
                         repository.saveCachedLiveQuotes(fetched.values)
                         fetched.forEach { (ticker, quote) ->
-                            appliedPositions += repository.applyLivePriceToPortfolio(ticker, quote.price)
+                            appliedPositions += repository.applyLivePriceToPortfolio(
+                                ticker = ticker,
+                                livePrice = quote.price,
+                                liveDataComDay = quote.dataComDay,
+                                liveDataExDay = quote.dataExDay
+                            )
                         }
                     }
                     evaluateLiveQuotesAgainstAlerts(fetched, notifyIfNoneTriggered = false)

@@ -536,11 +536,16 @@ fun DashboardScreen(
                 }
                 Spacer(Modifier.height(10.dp))
                 val groups = DataComGroup.entries
+                val realByTicker = state.realPositions.associateBy { it.ticker.trim().uppercase() }
+                val marketByTicker = state.marketAssets.associateBy { it.ticker.trim().uppercase() }
+                val effectiveGroupByTicker = (realByTicker.keys + marketByTicker.keys).distinct().mapNotNull { tk ->
+                    val effectiveDay = realByTicker[tk]?.dataComDay
+                        ?: state.liveQuotesByTicker[tk]?.dataComDay
+                        ?: marketByTicker[tk]?.dataComDay
+                    DataComGroup.fromDay(effectiveDay)?.let { tk to it }
+                }
                 val groupCounts = groups.map { g ->
-                    val marketTickers = state.marketAssets.filter { it.dataComGroup == g }.map { it.ticker }
-                    val realTickers = state.realPositions.filter { DataComGroup.fromDay(it.dataComDay) == g }.map { it.ticker }
-                    val distinctCount = (marketTickers + realTickers).distinct().size.toDouble()
-                    g.label to distinctCount
+                    g.label to effectiveGroupByTicker.count { it.second == g }.toDouble()
                 }
                 HorizontalBarDistribution(
                     items = groupCounts,

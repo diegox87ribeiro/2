@@ -50,6 +50,22 @@ interface CarteiraLocalDao {
         atualizadoEm: Long = System.currentTimeMillis()
     ): Int
 
+    @Query(
+        """
+        UPDATE ativos
+        SET dataComDia = COALESCE(dataComDia, :dataComDia),
+            dataExDia = COALESCE(:dataExDia, dataExDia),
+            atualizadoEm = :atualizadoEm
+        WHERE UPPER(ticker) = UPPER(:ticker)
+        """
+    )
+    suspend fun atualizarDatasDividendoSeAusente(
+        ticker: String,
+        dataComDia: Int?,
+        dataExDia: Int?,
+        atualizadoEm: Long = System.currentTimeMillis()
+    ): Int
+
     @Delete
     suspend fun deletarAtivo(ativo: Ativo)
 

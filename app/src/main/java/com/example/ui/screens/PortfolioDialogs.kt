@@ -77,11 +77,15 @@ fun ImportPreviewDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                val isQuickUpdateMode = preview.positions.isEmpty() && preview.quickUpdates.isNotEmpty()
                 Text(
-                    if (preview.positions.isNotEmpty()) {
-                        "Ao confirmar, esta importação substituirá a Carteira Real atual, gravando os ativos e os proventos detectados na tabela."
-                    } else {
-                        "Ao confirmar, os proventos detectados na planilha serão adicionados ao histórico da Carteira Real (sem alterar posições)."
+                    when {
+                        preview.positions.isNotEmpty() ->
+                            "Ao confirmar, esta importação substituirá a Carteira Real atual, gravando os ativos e os proventos detectados na tabela."
+                        isQuickUpdateMode ->
+                            "Modo Atualização Rápida: atualiza preço, data, Data-Com e proventos dos ativos existentes na Carteira Real sem alterar quantidades nem preços médios."
+                        else ->
+                            "Ao confirmar, os proventos detectados na planilha serão adicionados ao histórico da Carteira Real (sem alterar posições)."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary
@@ -91,8 +95,13 @@ fun ImportPreviewDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
+                    val countSummary = if (isQuickUpdateMode) {
+                        "${preview.quickUpdates.size} atualização(ões) • ${preview.dividends.size} provento(s)"
+                    } else {
+                        "${preview.positions.size} ativos • ${preview.dividends.size} provento(s)"
+                    }
                     Text(
-                        "${preview.positions.size} ativos • ${preview.dividends.size} provento(s)",
+                        countSummary,
                         style = MaterialTheme.typography.labelLarge,
                         color = EmeraldPrimary,
                         modifier = Modifier.testTag("preview_counts_label")
@@ -159,6 +168,52 @@ fun ImportPreviewDialog(
                     }
                 }
 
+                if (preview.positions.isEmpty() && preview.quickUpdates.isNotEmpty()) {
+                    Text(
+                        "Atualizações de Ativo, Preço, Data e Dividendos (${preview.quickUpdates.size})",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = EmeraldPrimary
+                    )
+                    preview.quickUpdates.take(10).forEach { upd ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(CardElevated.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(upd.ticker, style = MaterialTheme.typography.labelLarge, color = EmeraldPrimary)
+                                val metaParts = buildList {
+                                    upd.referenceDate?.let { add("Data $it") }
+                                    upd.dataComDay?.let { add("Data-Com dia $it") }
+                                }
+                                Text(
+                                    metaParts.joinToString(" • ").ifBlank { "Atualização de ativo" },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextSecondary
+                                )
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                upd.price?.let { p ->
+                                    Text(formatBrl(p), style = MonoValueStyle)
+                                }
+                                upd.dividendAmount?.let { d ->
+                                    Text("+${formatBrl(d)} div.", style = MaterialTheme.typography.labelSmall, color = ElectricCyan)
+                                }
+                            }
+                        }
+                    }
+                    if (preview.quickUpdates.size > 10) {
+                        Text(
+                            "... e mais ${preview.quickUpdates.size - 10} linha(s).",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextSecondary
+                        )
+                    }
+                }
+
                 if (preview.dividends.isNotEmpty()) {
                     HorizontalDivider(color = SubtleBorder)
                     Text(
@@ -198,7 +253,13 @@ fun ImportPreviewDialog(
                 modifier = Modifier.testTag("confirm_import_button"),
                 colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary, contentColor = EmeraldOnPrimary)
             ) {
-                Text("Confirmar na Carteira Real")
+                Text(
+                    if (preview.positions.isEmpty() && preview.quickUpdates.isNotEmpty()) {
+                        "Aplicar Atualizações"
+                    } else {
+                        "Confirmar na Carteira Real"
+                    }
+                )
             }
         },
         dismissButton = {
@@ -215,16 +276,17 @@ fun ImportPreviewDialog(
 @Composable
 fun ImportStandardSpecDialog(
     onDismiss: () -> Unit,
-    onDownloadTemplate: () -> Unit
+    onDownloadTemplate: () -> Unit,
+    onDownloadQuickUpdateTemplate: () -> Unit = {}
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Padrão de Planilha CSV / XLSX") },
+        title = { Text("Modelos de Planilha CSV / XLSX") },
         text = {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 360.dp)
+                    .heightIn(max = 400.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -232,6 +294,61 @@ fun ImportStandardSpecDialog(
                     "Arquivos .csv (UTF-8 ou Windows-1252, separador ';' ou ',') e .xlsx são processados localmente. Valores aceitam formato brasileiro (ex: 1.234,56).",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary
+                )
+
+                Text(
+                    "1) Modelo Atualização Rápida (Ativo, Preço, Data, Dividendos)",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = ElectricCyan
+                )
+                Text(
+                    "Atualiza cotação, data, Data-Com e lança dividendos na Carteira Real sem apagar suas quantidades e preços médios.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+                SpreadsheetImporter.QUICK_UPDATE_COLUMN_SPECS.forEach { spec ->
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(ElectricCyan.copy(alpha = 0.08f), RoundedCornerShape(8.dp))
+                            .border(1.dp, ElectricCyan.copy(alpha = 0.25f), RoundedCornerShape(8.dp))
+                            .padding(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(spec.name, style = MaterialTheme.typography.labelLarge, color = ElectricCyan)
+                            Text(
+                                if (spec.required) "OBRIGATÓRIA" else "OPCIONAL",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (spec.required) AmberGold else EmeraldPrimary
+                            )
+                        }
+                        Text("Aceita: ${spec.aliases}", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                        Text("Exemplo: ${spec.example}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+                    }
+                }
+
+                Button(
+                    onClick = {
+                        onDismiss()
+                        onDownloadQuickUpdateTemplate()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("dialog_download_quick_update_button"),
+                    colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = EmeraldOnPrimary)
+                ) {
+                    Text("Baixar Modelo Atualização (Ativo;Preço;Data;Dividendos)")
+                }
+
+                HorizontalDivider(color = SubtleBorder)
+
+                Text(
+                    "2) Modelo Completo de Carteira (Substitui Posições)",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = EmeraldPrimary
                 )
                 SpreadsheetImporter.STANDARD_COLUMN_SPECS.forEach { spec ->
                     Column(
@@ -270,7 +387,7 @@ fun ImportStandardSpecDialog(
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary, contentColor = EmeraldOnPrimary)
             ) {
-                Text("Salvar Modelo CSV")
+                Text("Modelo Completo CSV")
             }
         },
         dismissButton = {

@@ -152,18 +152,82 @@ fun DividendCalendarScreen(
         }
     }
 
-    val dividendAssets = remember(state.marketAssets) {
-        state.marketAssets.filter { it.dataComDay != null }.sortedBy { it.dataComDay }
-    }
-    val filteredDataComAssets = remember(dividendAssets, selectedGroup) {
-        if (selectedGroup == null) dividendAssets
-        else dividendAssets.filter { it.dataComGroup == selectedGroup }
-    }
     val realPositionsByTicker = remember(state.realPositions) {
-        state.realPositions.associateBy { it.ticker }
+        state.realPositions.associateBy { it.ticker.trim().uppercase() }
+    }
+    val marketAssetsByTicker = remember(state.marketAssets) {
+        state.marketAssets.associateBy { it.ticker.trim().uppercase() }
     }
     val summaryRowByTicker = remember(dividendSummary.perAssetRows) {
-        dividendSummary.perAssetRows.associateBy { it.ticker }
+        dividendSummary.perAssetRows.associateBy { it.ticker.trim().uppercase() }
+    }
+
+    data class DataComCalendarEntry(
+        val ticker: String,
+        val name: String,
+        val assetClass: AssetClass,
+        val dataComDay: Int,
+        val paymentDay: Int?,
+        val lastDividendBrl: Double,
+        val dy12m: Double,
+        val sourceBadge: String,
+        val ownedQuantity: Double?,
+        val nextDataComFormatted: String,
+        val nextDataExFormatted: String
+    ) {
+        val group: DataComGroup? get() = DataComGroup.fromDay(dataComDay)
+    }
+
+    val dividendEntries = remember(state.realPositions, state.marketAssets, state.liveQuotesByTicker) {
+        val todayStart = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val allTickers = (realPositionsByTicker.keys + marketAssetsByTicker.keys).distinct()
+        allTickers.mapNotNull { ticker ->
+            val owned = realPositionsByTicker[ticker]
+            val asset = marketAssetsByTicker[ticker]
+            val live = state.liveQuotesByTicker[ticker]
+            val resolvedCom = owned?.dataComDay ?: live?.dataComDay ?: asset?.dataComDay ?: return@mapNotNull null
+            if (resolvedCom !in 1..31) return@mapNotNull null
+            val nextComCal = DividendDateAlertEvaluator.nextMonthlyOccurrence(todayStart, resolvedCom)
+            val nextExCal = DividendDateAlertEvaluator.nextDataExFromDataCom(todayStart, resolvedCom)
+            val nextComStr = "%02d/%02d/%04d".format(
+                nextComCal.get(Calendar.DAY_OF_MONTH),
+                nextComCal.get(Calendar.MONTH) + 1,
+                nextComCal.get(Calendar.YEAR)
+            )
+            val nextExStr = "%02d/%02d/%04d".format(
+                nextExCal.get(Calendar.DAY_OF_MONTH),
+                nextExCal.get(Calendar.MONTH) + 1,
+                nextExCal.get(Calendar.YEAR)
+            )
+            val badge = when {
+                owned?.dataComDay != null -> "Carteira"
+                live?.dataComDay != null -> "Tempo Real"
+                else -> "Catálogo"
+            }
+            DataComCalendarEntry(
+                ticker = ticker,
+                name = owned?.name?.takeIf { it.isNotBlank() } ?: asset?.name ?: live?.companyName ?: ticker,
+                assetClass = owned?.assetClass ?: asset?.assetClass ?: AssetClass.FII,
+                dataComDay = resolvedCom,
+                paymentDay = live?.paymentDay ?: asset?.paymentDay,
+                lastDividendBrl = live?.lastDividendBrl ?: asset?.lastDividendBrl ?: 0.0,
+                dy12m = live?.dividendYield12m ?: asset?.dy12m ?: 0.0,
+                sourceBadge = badge,
+                ownedQuantity = owned?.quantity,
+                nextDataComFormatted = nextComStr,
+                nextDataExFormatted = nextExStr
+            )
+        }.sortedWith(compareBy<DataComCalendarEntry> { it.ownedQuantity == null }.thenBy { it.dataComDay }.thenBy { it.ticker })
+    }
+
+    val filteredDataComEntries = remember(dividendEntries, selectedGroup) {
+        if (selectedGroup == null) dividendEntries
+        else dividendEntries.filter { it.group == selectedGroup }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -495,7 +559,7 @@ fun DividendCalendarScreen(
 
                     item {
                         DataDisclaimerBanner(
-                            text = "Calendário estratégico por grupos de Data-Com (G1: dias 1–8 • G2: 9–16 • G3: 17–24 • G4: 25–31). Datas sujeitas a confirmação no RI/B3."
+                            text = "Calendário ajustado aos dias úteis e feriados da B3 (G1: dias 1–8 • G2: 9–16 • G3: 17–24 • G4: 25–31). Prioriza a Data-Com da sua Carteira e dados ao vivo (Investidor10/Brapi)."
                         )
                     }
 
@@ -511,9 +575,7 @@ fun DividendCalendarScreen(
                             Spacer(Modifier.height(10.dp))
                             val groups = DataComGroup.entries
                             val groupCounts = groups.map { grp ->
-                                val marketTickers = dividendAssets.filter { it.dataComGroup == grp }.map { it.ticker }
-                                val realTickers = state.realPositions.filter { DataComGroup.fromDay(it.dataComDay) == grp }.map { it.ticker }
-                                grp.label to (marketTickers + realTickers).distinct().size.toDouble()
+                                grp.label to dividendEntries.count { it.group == grp }.toDouble()
                             }
                             HorizontalBarDistribution(
                                 items = groupCounts,
@@ -534,11 +596,10 @@ fun DividendCalendarScreen(
                         )
                     }
 
-                    items(filteredDataComAssets, key = { it.ticker }) { asset ->
-                        val owned = realPositionsByTicker[asset.ticker]
-                        val assetRow = summaryRowByTicker[asset.ticker]
+                    items(filteredDataComEntries, key = { it.ticker }) { entry ->
+                        val assetRow = summaryRowByTicker[entry.ticker]
                         val projectedBrl = assetRow?.projectedForMonth(selectedMonthIndex)
-                            ?: owned?.let { it.quantity * asset.lastDividendBrl }
+                            ?: entry.ownedQuantity?.let { it * entry.lastDividendBrl }
                             ?: 0.0
                         val receivedBrl = assetRow?.receivedForMonth(selectedMonthIndex) ?: 0.0
 
@@ -550,26 +611,41 @@ fun DividendCalendarScreen(
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(asset.ticker, style = MaterialTheme.typography.titleMedium, color = EmeraldPrimary)
+                                        Text(entry.ticker, style = MaterialTheme.typography.titleMedium, color = EmeraldPrimary)
                                         Spacer(Modifier.width(8.dp))
-                                        GroupBadge(asset.dataComGroup)
+                                        GroupBadge(entry.group)
                                     }
-                                    Text("${asset.name} • ${asset.assetClass.shortLabel}", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
                                     Text(
-                                        "Data-Com: Dia ${asset.dataComDay} • Pgto previsto: Dia ${asset.paymentDay ?: "-"}",
+                                        "${entry.name} • ${entry.assetClass.shortLabel} • ${entry.sourceBadge}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextSecondary
+                                    )
+                                    Text(
+                                        "Próx. Data-Com: ${entry.nextDataComFormatted} (Dia ${entry.dataComDay}) • Data-Ex: ${entry.nextDataExFormatted}",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = ElectricCyan
                                     )
+                                    entry.paymentDay?.let { payDay ->
+                                        Text(
+                                            "Pgto previsto: Dia $payDay",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = TextSecondary
+                                        )
+                                    }
                                 }
                                 Column(horizontalAlignment = Alignment.End) {
-                                    Text(formatBrl(asset.lastDividendBrl) + "/cota", style = MonoValueStyle)
-                                    Text("DY 12m: ${formatPct(asset.dy12m, false)}", style = MaterialTheme.typography.labelSmall, color = EmeraldPrimary)
+                                    if (entry.lastDividendBrl > 0.0) {
+                                        Text(formatBrl(entry.lastDividendBrl) + "/cota", style = MonoValueStyle)
+                                    }
+                                    if (entry.dy12m > 0.0) {
+                                        Text("DY 12m: ${formatPct(entry.dy12m, false)}", style = MaterialTheme.typography.labelSmall, color = EmeraldPrimary)
+                                    }
                                 }
                             }
-                            if (owned != null) {
+                            if (entry.ownedQuantity != null) {
                                 Spacer(Modifier.height(6.dp))
                                 Text(
-                                    "Carteira Real (${"%.0f".format(owned.quantity)} cotas) • $monthNameShort: Rec ${formatBrl(receivedBrl)} | Proj ${formatBrl(projectedBrl)}",
+                                    "Carteira Real (${"%.0f".format(entry.ownedQuantity)} cotas) • $monthNameShort: Rec ${formatBrl(receivedBrl)} | Proj ${formatBrl(projectedBrl)}",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = EmeraldPrimary
                                 )
