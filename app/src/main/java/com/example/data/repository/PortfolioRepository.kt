@@ -6,8 +6,11 @@ import com.example.data.importexport.ImportParseResult
 import com.example.data.importexport.SpreadsheetImporter
 import com.example.data.local.AiRecommendationDao
 import com.example.data.local.AppPreferencesState
+import com.example.data.local.Ativo
+import com.example.data.local.AtivoComTransacoes
 import com.example.data.local.CachedMarketQuoteDao
 import com.example.data.local.CachedMarketQuoteEntity
+import com.example.data.local.CarteiraLocalDao
 import com.example.data.local.CryptoVirtualDao
 import com.example.data.local.CryptoVirtualPositionEntity
 import com.example.data.local.ImportHistoryEntity
@@ -22,6 +25,7 @@ import com.example.data.local.SavedAiRecommendationEntity
 import com.example.data.local.StrategyChangeLogEntity
 import com.example.data.local.StrategyCriteriaEntity
 import com.example.data.local.StrategyDao
+import com.example.data.local.Transacao
 import com.example.domain.model.AiRecommendation
 import com.example.domain.model.AssetClass
 import com.example.domain.model.LiveMarketQuote
@@ -40,13 +44,19 @@ class PortfolioRepository(
     private val prefs: PreferencesManager
 ) {
     private val portfolioDao: PortfolioDao = db.portfolioDao()
+    private val carteiraLocalDao: CarteiraLocalDao = db.carteiraLocalDao()
     private val strategyDao: StrategyDao = db.strategyDao()
     private val cryptoDao: CryptoVirtualDao = db.cryptoVirtualDao()
     private val aiDao: AiRecommendationDao = db.aiRecommendationDao()
     private val alertDao: PriceTargetAlertDao = db.priceTargetAlertDao()
     private val cachedQuoteDao: CachedMarketQuoteDao = db.cachedMarketQuoteDao()
 
+    val carteiraLocalRepository: CarteiraLocalRepository = CarteiraLocalRepository(carteiraLocalDao)
+
     val preferencesFlow: Flow<AppPreferencesState> = prefs.preferencesFlow
+    val ativosLocaisFlow: Flow<List<Ativo>> = carteiraLocalRepository.ativosFlow
+    val transacoesLocaisFlow: Flow<List<Transacao>> = carteiraLocalRepository.transacoesFlow
+    val ativosComTransacoesFlow: Flow<List<AtivoComTransacoes>> = carteiraLocalRepository.ativosComTransacoesFlow
 
     val positionsFlow: Flow<List<PortfolioItemView>> = portfolioDao.observeAllPositions().map { list ->
         list.map { entity ->
@@ -170,12 +180,14 @@ class PortfolioRepository(
                 notes = if (result.warnings.isEmpty()) "Importação limpa sem alertas." else result.warnings.joinToString(" | ")
             )
             portfolioDao.replaceRealPortfolioFromImport(history, result.positions)
+            mirrorRealPositionsToAtivos(result.positions)
         }
         if (result.dividends.isNotEmpty()) {
             val existingRefs = portfolioDao.getExistingExternalRefIds().toHashSet()
             val newDivs = result.dividends.filter { it.externalRefId.isBlank() || it.externalRefId !in existingRefs }
             if (newDivs.isNotEmpty()) {
                 portfolioDao.insertOperations(newDivs)
+                newDivs.forEach { mirrorRealOperationToTransacao(it) }
             }
         }
         result.cashBalanceBrl?.let { prefs.setCashRealBrl(it) }
@@ -230,6 +242,7 @@ class PortfolioRepository(
             notes = "Dados fictícios carregados manualmente para demonstração."
         )
         portfolioDao.replaceRealPortfolioFromImport(history, demoPositions)
+        mirrorRealPositionsToAtivos(demoPositions)
         prefs.setCashRealBrl(4250.0)
     }
 
@@ -238,6 +251,7 @@ class PortfolioRepository(
         portfolioDao.clearOperationsByType(type.name)
         if (type == PortfolioType.REAL) {
             portfolioDao.clearActiveRealReference()
+            carteiraLocalRepository.limparCarteiraLocal()
             prefs.setCashRealBrl(0.0)
         } else {
             prefs.setCashSimBrl(25000.0)
@@ -257,35 +271,37 @@ class PortfolioRepository(
     ) {
         val cleanTicker = ticker.trim().uppercase()
         val hasPrice = currentPrice != null && currentPrice > 0.0
-        portfolioDao.insertPosition(
-            PortfolioPositionEntity(
-                portfolioType = portfolioType.name,
-                ticker = cleanTicker,
-                name = name.ifBlank { cleanTicker },
-                assetClass = assetClass.name,
-                quantity = quantity,
-                averagePrice = averagePrice,
-                currentPrice = currentPrice ?: 0.0,
-                hasMarketPrice = hasPrice,
-                sector = sector.ifBlank { assetClass.shortLabel },
-                dataComDay = dataComDay,
-                dataSourceLabel = "Registro Manual (${portfolioType.label})",
-                isDemo = false
-            )
+        val positionEntity = PortfolioPositionEntity(
+            portfolioType = portfolioType.name,
+            ticker = cleanTicker,
+            name = name.ifBlank { cleanTicker },
+            assetClass = assetClass.name,
+            quantity = quantity,
+            averagePrice = averagePrice,
+            currentPrice = currentPrice ?: 0.0,
+            hasMarketPrice = hasPrice,
+            sector = sector.ifBlank { assetClass.shortLabel },
+            dataComDay = dataComDay,
+            dataSourceLabel = "Registro Manual (${portfolioType.label})",
+            isDemo = false
         )
+        portfolioDao.insertPosition(positionEntity)
         val today = SimpleDateFormat("dd/MM/yyyy", Locale("pt", "BR")).format(Date())
-        portfolioDao.insertOperation(
-            PortfolioOperationEntity(
-                portfolioType = portfolioType.name,
-                ticker = cleanTicker,
-                operationType = OperationType.COMPRA.name,
-                quantity = quantity,
-                unitPrice = averagePrice,
-                totalValue = quantity * averagePrice,
-                dateIso = today,
-                notes = "Registro manual"
-            )
+        val opEntity = PortfolioOperationEntity(
+            portfolioType = portfolioType.name,
+            ticker = cleanTicker,
+            operationType = OperationType.COMPRA.name,
+            quantity = quantity,
+            unitPrice = averagePrice,
+            totalValue = quantity * averagePrice,
+            dateIso = today,
+            notes = "Registro manual"
         )
+        portfolioDao.insertOperation(opEntity)
+        if (portfolioType == PortfolioType.REAL) {
+            mirrorRealPositionsToAtivos(listOf(positionEntity))
+            mirrorRealOperationToTransacao(opEntity)
+        }
     }
 
     suspend fun syncProfitChartExecutions(
@@ -428,6 +444,26 @@ class PortfolioRepository(
                     else -> Unit
                 }
             }
+            mirrorRealPositionsToAtivos(currentReal.values.toList())
+        }
+        if (newExecutions.isNotEmpty()) {
+            newExecutions.forEach { exec ->
+                val brokerPrefix = if (exec.brokerAccount.isNotBlank()) "${exec.brokerAccount} • " else ""
+                mirrorRealOperationToTransacao(
+                    PortfolioOperationEntity(
+                        portfolioType = PortfolioType.REAL.name,
+                        ticker = exec.ticker,
+                        operationType = exec.operationType.name,
+                        quantity = exec.quantity,
+                        unitPrice = exec.unitPrice,
+                        totalValue = exec.totalValue,
+                        dateIso = exec.executedAtLabel,
+                        notes = "$brokerPrefix${exec.sourceChannel} (${exec.statusLabel})",
+                        externalRefId = exec.externalRefId,
+                        brokerAccount = exec.brokerAccount
+                    )
+                )
+            }
         }
 
         val msg = when {
@@ -461,18 +497,20 @@ class PortfolioRepository(
         val total = quantity * unitPrice
         val resolvedDate = dateIso?.trim()?.takeIf { it.isNotBlank() }
             ?: SimpleDateFormat("dd/MM/yyyy", Locale("pt", "BR")).format(Date())
-        portfolioDao.insertOperation(
-            PortfolioOperationEntity(
-                portfolioType = portfolioType.name,
-                ticker = ticker.trim().uppercase().ifBlank { "CAIXA" },
-                operationType = operationType.name,
-                quantity = quantity,
-                unitPrice = unitPrice,
-                totalValue = total,
-                dateIso = resolvedDate,
-                notes = notes
-            )
+        val opEntity = PortfolioOperationEntity(
+            portfolioType = portfolioType.name,
+            ticker = ticker.trim().uppercase().ifBlank { "CAIXA" },
+            operationType = operationType.name,
+            quantity = quantity,
+            unitPrice = unitPrice,
+            totalValue = total,
+            dateIso = resolvedDate,
+            notes = notes
         )
+        portfolioDao.insertOperation(opEntity)
+        if (portfolioType == PortfolioType.REAL) {
+            mirrorRealOperationToTransacao(opEntity)
+        }
     }
 
     suspend fun deleteOperation(id: Long) {
@@ -512,18 +550,34 @@ class PortfolioRepository(
             dataSourceLabel = updatedSource,
             updatedAt = System.currentTimeMillis()
         )
+        val realPositions = portfolioDao.getPositionsByType(PortfolioType.REAL.name)
+        if (realPositions.any { it.id == id }) {
+            mirrorRealPositionsToAtivos(realPositions)
+        }
     }
 
     suspend fun applyLivePriceToPortfolio(ticker: String, livePrice: Double): Int {
         if (livePrice <= 0.0) return 0
+        val cleanTicker = ticker.trim().uppercase()
+        carteiraLocalRepository.atualizarCotacao(cleanTicker, livePrice)
         return portfolioDao.updateCurrentPriceByTicker(
-            ticker = ticker.trim().uppercase(),
+            ticker = cleanTicker,
             currentPrice = livePrice,
             updatedAt = System.currentTimeMillis()
         )
     }
 
-    suspend fun deletePosition(id: Long) = portfolioDao.deletePositionById(id)
+    suspend fun deletePosition(id: Long) {
+        val targetReal = portfolioDao.getPositionsByType(PortfolioType.REAL.name).firstOrNull { it.id == id }
+        portfolioDao.deletePositionById(id)
+        if (targetReal != null) {
+            val stillExists = portfolioDao.getPositionsByType(PortfolioType.REAL.name)
+                .any { it.ticker.equals(targetReal.ticker, ignoreCase = true) }
+            if (!stillExists) {
+                carteiraLocalRepository.excluirAtivoPorTicker(targetReal.ticker)
+            }
+        }
+    }
 
     suspend fun updateCashBalance(type: PortfolioType, amount: Double) {
         if (type == PortfolioType.REAL) prefs.setCashRealBrl(amount)
@@ -657,5 +711,66 @@ class PortfolioRepository(
 
     suspend fun recordSentDividendAlertKeys(newKeys: Collection<String>) {
         prefs.recordSentDividendAlertKeys(newKeys)
+    }
+
+    private fun PortfolioPositionEntity.toAtivo(): Ativo = Ativo(
+        ticker = ticker.trim().uppercase(),
+        nome = name.ifBlank { ticker.trim().uppercase() },
+        classe = assetClass,
+        setor = sector.ifBlank { "Geral" },
+        quantidade = quantity,
+        precoMedio = averagePrice,
+        precoAtual = currentPrice,
+        possuiCotacaoMercado = hasMarketPrice,
+        dataComDia = dataComDay,
+        origemDados = dataSourceLabel.ifBlank { "Local" },
+        atualizadoEm = updatedAt
+    )
+
+    private suspend fun mirrorRealPositionsToAtivos(positions: List<PortfolioPositionEntity>) {
+        val ativos = positions
+            .filter { it.portfolioType == PortfolioType.REAL.name && it.ticker.isNotBlank() }
+            .map { it.toAtivo() }
+        if (ativos.isNotEmpty()) {
+            carteiraLocalRepository.sincronizarAtivos(ativos)
+        }
+    }
+
+    private suspend fun mirrorRealOperationToTransacao(op: PortfolioOperationEntity) {
+        val cleanTicker = op.ticker.trim().uppercase().ifBlank { "CAIXA" }
+        val existingAtivo = carteiraLocalDao.buscarAtivoPorTicker(cleanTicker)
+        if (existingAtivo == null) {
+            val inferredClass = if (cleanTicker == "CAIXA") {
+                AssetClass.RENDA_FIXA
+            } else {
+                LiveQuoteParsers.inferAssetClassFromTicker(cleanTicker)
+            }
+            carteiraLocalDao.inserirAtivo(
+                Ativo(
+                    ticker = cleanTicker,
+                    nome = cleanTicker,
+                    classe = inferredClass.name,
+                    setor = inferredClass.shortLabel,
+                    quantidade = 0.0,
+                    precoMedio = op.unitPrice.coerceAtLeast(0.0),
+                    precoAtual = op.unitPrice.coerceAtLeast(0.0),
+                    possuiCotacaoMercado = op.unitPrice > 0.0,
+                    origemDados = "Transação Local"
+                )
+            )
+        }
+        carteiraLocalDao.inserirTransacao(
+            Transacao(
+                ativoTicker = cleanTicker,
+                tipo = op.operationType,
+                quantidade = op.quantity,
+                precoUnitario = op.unitPrice,
+                valorTotal = op.totalValue,
+                dataIso = op.dateIso,
+                observacoes = op.notes,
+                referenciaExterna = op.externalRefId,
+                criadoEm = op.createdAt
+            )
+        )
     }
 }

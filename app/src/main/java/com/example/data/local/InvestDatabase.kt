@@ -18,13 +18,16 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SavedAiRecommendationEntity::class,
         ChatMessageEntity::class,
         PriceTargetAlertEntity::class,
-        CachedMarketQuoteEntity::class
+        CachedMarketQuoteEntity::class,
+        Ativo::class,
+        Transacao::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class InvestDatabase : RoomDatabase() {
     abstract fun portfolioDao(): PortfolioDao
+    abstract fun carteiraLocalDao(): CarteiraLocalDao
     abstract fun strategyDao(): StrategyDao
     abstract fun cryptoVirtualDao(): CryptoVirtualDao
     abstract fun aiRecommendationDao(): AiRecommendationDao
@@ -124,6 +127,100 @@ abstract class InvestDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `ativos` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `ticker` TEXT NOT NULL,
+                        `nome` TEXT NOT NULL,
+                        `classe` TEXT NOT NULL,
+                        `setor` TEXT NOT NULL,
+                        `quantidade` REAL NOT NULL,
+                        `precoMedio` REAL NOT NULL,
+                        `precoAtual` REAL NOT NULL,
+                        `possuiCotacaoMercado` INTEGER NOT NULL,
+                        `dataComDia` INTEGER,
+                        `dataExDia` INTEGER,
+                        `origemDados` TEXT NOT NULL,
+                        `atualizadoEm` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_ativos_ticker` ON `ativos` (`ticker`)")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `transacoes` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `ativoTicker` TEXT NOT NULL,
+                        `tipo` TEXT NOT NULL,
+                        `quantidade` REAL NOT NULL,
+                        `precoUnitario` REAL NOT NULL,
+                        `valorTotal` REAL NOT NULL,
+                        `taxas` REAL NOT NULL,
+                        `dataIso` TEXT NOT NULL,
+                        `observacoes` TEXT NOT NULL,
+                        `referenciaExterna` TEXT NOT NULL,
+                        `criadoEm` INTEGER NOT NULL,
+                        FOREIGN KEY(`ativoTicker`) REFERENCES `ativos`(`ticker`) ON UPDATE CASCADE ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_transacoes_ativoTicker` ON `transacoes` (`ativoTicker`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_transacoes_dataIso` ON `transacoes` (`dataIso`)")
+
+                // Migra posições e operações existentes da Carteira Real para ativos e transacoes
+                db.execSQL(
+                    """
+                    INSERT OR IGNORE INTO `ativos` (
+                        `ticker`, `nome`, `classe`, `setor`, `quantidade`, `precoMedio`,
+                        `precoAtual`, `possuiCotacaoMercado`, `dataComDia`, `dataExDia`, `origemDados`, `atualizadoEm`
+                    )
+                    SELECT
+                        UPPER(TRIM(ticker)),
+                        name,
+                        assetClass,
+                        sector,
+                        quantity,
+                        averagePrice,
+                        currentPrice,
+                        hasMarketPrice,
+                        dataComDay,
+                        NULL,
+                        dataSourceLabel,
+                        updatedAt
+                    FROM portfolio_positions
+                    WHERE portfolioType = 'REAL' AND TRIM(ticker) != ''
+                    """.trimIndent()
+                )
+
+                db.execSQL(
+                    """
+                    INSERT INTO `transacoes` (
+                        `ativoTicker`, `tipo`, `quantidade`, `precoUnitario`, `valorTotal`,
+                        `taxas`, `dataIso`, `observacoes`, `referenciaExterna`, `criadoEm`
+                    )
+                    SELECT
+                        UPPER(TRIM(op.ticker)),
+                        op.operationType,
+                        op.quantity,
+                        op.unitPrice,
+                        op.totalValue,
+                        0.0,
+                        op.dateIso,
+                        op.notes,
+                        op.externalRefId,
+                        op.createdAt
+                    FROM portfolio_operations op
+                    INNER JOIN `ativos` a ON a.ticker = UPPER(TRIM(op.ticker))
+                    WHERE op.portfolioType = 'REAL'
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getInstance(context: Context): InvestDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -131,7 +228,14 @@ abstract class InvestDatabase : RoomDatabase() {
                     InvestDatabase::class.java,
                     "invest_ai_local.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                    .addMigrations(
+                        MIGRATION_1_2,
+                        MIGRATION_2_3,
+                        MIGRATION_3_4,
+                        MIGRATION_4_5,
+                        MIGRATION_5_6,
+                        MIGRATION_6_7
+                    )
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                 INSTANCE = instance
