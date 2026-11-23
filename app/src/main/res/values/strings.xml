@@ -6,4 +6,14 @@
     <string name="security_no_orders">Plataforma exclusivamente analítica — nunca executa ordens financeiras nem solicita senhas bancárias.</string>
     <string name="cd_open_menu">Abrir menu de módulos</string>
     <string name="cd_brand_logo">Logo INVEST AI</string>
+    <string name="dividend_control_title">Controle Mensal de Proventos</string>
+    <string name="dividend_tab_monthly">Controle Mensal</string>
+    <string name="dividend_tab_by_asset">Por Ativo (12m)</string>
+    <string name="dividend_tab_datacom">Datas-Com G1–G4</string>
+    <string name="dividend_record_cta">Registrar Provento</string>
+    <string name="cd_delete_dividend">Remover lançamento de provento</string>
+    <string name="cd_expand_asset_months">Expandir mapa mensal do ativo</string>
+    <string name="dividend_alerts_title">Alertas de Data-Com e Data-Ex</string>
+    <string name="dividend_alerts_check_now">Verificar Agora</string>
+    <string name="dividend_alerts_test_push">Testar Alerta</string>
 </resources>

@@ -267,7 +267,7 @@ fun DividendMonitorDashboardCard(
                     .heightIn(min = 48.dp)
                     .testTag("dividend_monitor_calendar_button")
             ) {
-                Text("Datas-Com G1–G4")
+                Text("Controle Mensal")
             }
         }
     }

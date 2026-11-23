@@ -4,10 +4,13 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.investPrefsDataStore by preferencesDataStore(name = "invest_ai_prefs")
@@ -32,7 +35,12 @@ data class AppPreferencesState(
     val targetPctRendaFixa: Double = 10.0,
     val targetPctCripto: Double = 5.0,
     val carryLossCommonBrl: Double = 0.0,
-    val carryLossFiiBrl: Double = 0.0
+    val carryLossFiiBrl: Double = 0.0,
+    val dividendAlertsEnabled: Boolean = true,
+    val dividendAlertLeadDays: Int = 3,
+    val dividendAlertDataCom: Boolean = true,
+    val dividendAlertDataEx: Boolean = true,
+    val dividendAlertSentKeys: Set<String> = emptySet()
 )
 
 class PreferencesManager(private val context: Context) {
@@ -57,6 +65,11 @@ class PreferencesManager(private val context: Context) {
         val TARGET_CRIPTO = doublePreferencesKey("target_pct_cripto")
         val CARRY_LOSS_COMMON = doublePreferencesKey("carry_loss_common_brl")
         val CARRY_LOSS_FII = doublePreferencesKey("carry_loss_fii_brl")
+        val DIV_ALERTS_ENABLED = booleanPreferencesKey("dividend_alerts_enabled")
+        val DIV_ALERTS_LEAD_DAYS = intPreferencesKey("dividend_alerts_lead_days")
+        val DIV_ALERTS_DATACOM = booleanPreferencesKey("dividend_alerts_datacom")
+        val DIV_ALERTS_DATAEX = booleanPreferencesKey("dividend_alerts_dataex")
+        val DIV_ALERTS_SENT_KEYS = stringSetPreferencesKey("dividend_alerts_sent_keys")
     }
 
     val preferencesFlow: Flow<AppPreferencesState> = context.investPrefsDataStore.data.map { prefs ->
@@ -80,9 +93,16 @@ class PreferencesManager(private val context: Context) {
             targetPctRendaFixa = prefs[Keys.TARGET_RF] ?: 10.0,
             targetPctCripto = prefs[Keys.TARGET_CRIPTO] ?: 5.0,
             carryLossCommonBrl = prefs[Keys.CARRY_LOSS_COMMON] ?: 0.0,
-            carryLossFiiBrl = prefs[Keys.CARRY_LOSS_FII] ?: 0.0
+            carryLossFiiBrl = prefs[Keys.CARRY_LOSS_FII] ?: 0.0,
+            dividendAlertsEnabled = prefs[Keys.DIV_ALERTS_ENABLED] ?: true,
+            dividendAlertLeadDays = (prefs[Keys.DIV_ALERTS_LEAD_DAYS] ?: 3).coerceIn(1, 14),
+            dividendAlertDataCom = prefs[Keys.DIV_ALERTS_DATACOM] ?: true,
+            dividendAlertDataEx = prefs[Keys.DIV_ALERTS_DATAEX] ?: true,
+            dividendAlertSentKeys = prefs[Keys.DIV_ALERTS_SENT_KEYS] ?: emptySet()
         )
     }
+
+    suspend fun getCurrentPreferences(): AppPreferencesState = preferencesFlow.first()
 
     suspend fun setCashRealBrl(amount: Double) {
         context.investPrefsDataStore.edit { it[Keys.CASH_REAL] = amount.coerceAtLeast(0.0) }
@@ -157,6 +177,29 @@ class PreferencesManager(private val context: Context) {
         context.investPrefsDataStore.edit {
             it[Keys.PROFIT_AUTO_SYNC] = false
             it[Keys.PROFIT_LAST_STATUS] = "Desconectado manualmente"
+        }
+    }
+
+    suspend fun saveDividendDateAlertConfig(
+        enabled: Boolean,
+        leadDays: Int,
+        notifyDataCom: Boolean,
+        notifyDataEx: Boolean
+    ) {
+        context.investPrefsDataStore.edit {
+            it[Keys.DIV_ALERTS_ENABLED] = enabled
+            it[Keys.DIV_ALERTS_LEAD_DAYS] = leadDays.coerceIn(1, 14)
+            it[Keys.DIV_ALERTS_DATACOM] = notifyDataCom
+            it[Keys.DIV_ALERTS_DATAEX] = notifyDataEx
+        }
+    }
+
+    suspend fun recordSentDividendAlertKeys(newKeys: Collection<String>) {
+        if (newKeys.isEmpty()) return
+        context.investPrefsDataStore.edit { prefs ->
+            val existing = prefs[Keys.DIV_ALERTS_SENT_KEYS].orEmpty()
+            val merged = (existing + newKeys).toList().takeLast(80).toSet()
+            prefs[Keys.DIV_ALERTS_SENT_KEYS] = merged
         }
     }
 }

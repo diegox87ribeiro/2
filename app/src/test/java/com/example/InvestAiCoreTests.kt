@@ -718,6 +718,217 @@ class InvestAiCoreTests {
             com.example.domain.model.PriceTargetEvaluator.suggestCondition(70.0, 64.0)
         )
     }
+
+    @Test
+    fun `dividend monitor computes per-asset monthly received and projected Jan to Dec series accurately`() {
+        val refCal = java.util.Calendar.getInstance().apply {
+            set(2026, java.util.Calendar.NOVEMBER, 18, 12, 0, 0)
+        }
+        val hglg = PortfolioItemView(
+            id = 10L,
+            portfolioType = PortfolioType.REAL,
+            ticker = "HGLG11",
+            name = "Pátria Logística",
+            assetClass = AssetClass.FII,
+            quantity = 100.0,
+            averagePrice = 155.0,
+            currentPrice = 156.40,
+            sector = "Logística",
+            dataComDay = 30,
+            dataSourceLabel = "XLSX",
+            isDemo = false,
+            hasMarketPrice = true
+        )
+        val smreCustom = PortfolioItemView(
+            id = 11L,
+            portfolioType = PortfolioType.REAL,
+            ticker = "SMRE11",
+            name = "Smart Real Estate FII",
+            assetClass = AssetClass.FII,
+            quantity = 50.0,
+            averagePrice = 55.17,
+            currentPrice = 56.30,
+            sector = "FIIs",
+            dataComDay = 30,
+            dataSourceLabel = "XLSX",
+            isDemo = false,
+            hasMarketPrice = true
+        )
+        val ops = listOf(
+            com.example.data.local.PortfolioOperationEntity(
+                id = 101L,
+                portfolioType = PortfolioType.REAL.name,
+                ticker = "HGLG11",
+                operationType = OperationType.PROVENTO.name,
+                quantity = 100.0,
+                unitPrice = 1.10,
+                totalValue = 110.0,
+                dateIso = "14/10/2026",
+                notes = "Rendimento Out",
+                createdAt = refCal.timeInMillis - 30L * 24 * 60 * 60 * 1000
+            ),
+            com.example.data.local.PortfolioOperationEntity(
+                id = 102L,
+                portfolioType = PortfolioType.REAL.name,
+                ticker = "HGLG11",
+                operationType = OperationType.PROVENTO.name,
+                quantity = 100.0,
+                unitPrice = 1.15,
+                totalValue = 115.0,
+                dateIso = "14/11/2026",
+                notes = "Rendimento Nov",
+                createdAt = refCal.timeInMillis
+            ),
+            com.example.data.local.PortfolioOperationEntity(
+                id = 103L,
+                portfolioType = PortfolioType.REAL.name,
+                ticker = "SMRE11",
+                operationType = OperationType.PROVENTO.name,
+                quantity = 50.0,
+                unitPrice = 0.60,
+                totalValue = 30.0,
+                dateIso = "16/10/2026",
+                notes = "Rendimento SMRE11",
+                createdAt = refCal.timeInMillis - 28L * 24 * 60 * 60 * 1000
+            )
+        )
+
+        val summary = com.example.domain.model.DividendMonitorCalculator.compute(
+            realPositions = listOf(hglg, smreCustom),
+            marketAssets = MarketCatalogRepository.catalogAssets,
+            operations = ops,
+            referenceDateMillis = refCal.timeInMillis,
+            selectedYear = 2026
+        )
+
+        assertEquals(2026, summary.selectedYear)
+        assertTrue(summary.availableYears.containsAll(listOf(2025, 2026, 2027)))
+        assertEquals(255.0, summary.receivedYearTotalBrl, 0.01)
+
+        val hglgRow = summary.perAssetRows.first { it.ticker == "HGLG11" }
+        assertEquals(12, hglgRow.monthlyPoints.size)
+        assertEquals(110.0, hglgRow.receivedForMonth(java.util.Calendar.OCTOBER), 0.01)
+        assertEquals(115.0, hglgRow.receivedForMonth(java.util.Calendar.NOVEMBER), 0.01)
+        assertEquals(110.0, hglgRow.projectedForMonth(java.util.Calendar.NOVEMBER), 0.01)
+        assertEquals(225.0, hglgRow.receivedYearBrl, 0.01)
+        assertEquals(1, hglgRow.operationsForMonth(java.util.Calendar.NOVEMBER).size)
+
+        val smreRow = summary.perAssetRows.first { it.ticker == "SMRE11" }
+        assertEquals(30.0, smreRow.receivedForMonth(java.util.Calendar.OCTOBER), 0.01)
+        assertEquals(30.0, smreRow.projectedForMonth(java.util.Calendar.NOVEMBER), 0.01)
+        assertEquals(360.0, smreRow.projectedAnnualBrl, 0.01)
+
+        for (m in 0..11) {
+            val sumRec = summary.perAssetRows.sumOf { it.receivedForMonth(m) }
+            val sumProj = summary.perAssetRows.sumOf { it.projectedForMonth(m) }
+            assertEquals(sumRec, summary.monthlyJanToDec[m].receivedBrl, 0.01)
+            assertEquals(sumProj, summary.monthlyJanToDec[m].projectedBrl, 0.01)
+        }
+    }
+
+    @Test
+    fun `dividend date alert evaluator detects upcoming Data-Com and Data-Ex respecting weekends and explicit Data-Ex`() {
+        // 28/11/2026 (Saturday) -> Data-Com day 30/11/2026 (Monday, 2 days away) -> derived Data-Ex 01/12/2026 (Tuesday, 3 days away)
+        val refCal = java.util.Calendar.getInstance().apply {
+            set(2026, java.util.Calendar.NOVEMBER, 28, 10, 0, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val hglg = PortfolioItemView(
+            id = 20L,
+            portfolioType = PortfolioType.REAL,
+            ticker = "HGLG11",
+            name = "Pátria Logística",
+            assetClass = AssetClass.FII,
+            quantity = 20.0,
+            averagePrice = 155.0,
+            currentPrice = 156.40,
+            sector = "Logística",
+            dataComDay = 30,
+            dataSourceLabel = "XLSX",
+            isDemo = false,
+            hasMarketPrice = true
+        )
+        val smre = PortfolioItemView(
+            id = 21L,
+            portfolioType = PortfolioType.REAL,
+            ticker = "SMRE11",
+            name = "Smart Real Estate",
+            assetClass = AssetClass.FII,
+            quantity = 10.0,
+            averagePrice = 55.0,
+            currentPrice = 56.30,
+            sector = "FIIs",
+            dataComDay = 30,
+            dataSourceLabel = "XLSX",
+            isDemo = false,
+            hasMarketPrice = true
+        )
+        val smreQuote = com.example.domain.model.LiveMarketQuote(
+            ticker = "SMRE11",
+            companyName = "Smart Real Estate",
+            price = 56.30,
+            changePercent1d = 0.0,
+            dataComDay = 30,
+            dataExDay = 3,
+            lastDividendBrl = 0.60,
+            primarySourceLabel = "Investidor10 + Yahoo",
+            consultedSources = listOf("Investidor10", "Yahoo Finance"),
+            marketTimestampLabel = "28/11/2026 10:00",
+            b3PageUrl = "",
+            advfnPageUrl = "",
+            fetchedAtMillis = refCal.timeInMillis
+        )
+
+        val upcomingWithin3Days = com.example.domain.model.DividendDateAlertEvaluator.findUpcomingAlerts(
+            realPositions = listOf(hglg, smre),
+            marketAssets = MarketCatalogRepository.catalogAssets,
+            liveQuotesByTicker = mapOf("SMRE11" to smreQuote),
+            leadDays = 3,
+            notifyDataCom = true,
+            notifyDataEx = true,
+            referenceDateMillis = refCal.timeInMillis
+        )
+
+        val hglgCom = upcomingWithin3Days.firstOrNull {
+            it.ticker == "HGLG11" && it.eventType == com.example.domain.model.DividendDateEventType.DATA_COM
+        }
+        val hglgEx = upcomingWithin3Days.firstOrNull {
+            it.ticker == "HGLG11" && it.eventType == com.example.domain.model.DividendDateEventType.DATA_EX
+        }
+        val smreCom = upcomingWithin3Days.firstOrNull {
+            it.ticker == "SMRE11" && it.eventType == com.example.domain.model.DividendDateEventType.DATA_COM
+        }
+        val smreExIn3d = upcomingWithin3Days.firstOrNull {
+            it.ticker == "SMRE11" && it.eventType == com.example.domain.model.DividendDateEventType.DATA_EX
+        }
+
+        org.junit.Assert.assertNotNull(hglgCom)
+        assertEquals("30/11/2026", hglgCom!!.eventDateFormatted)
+        assertEquals(2, hglgCom.daysUntil)
+
+        org.junit.Assert.assertNotNull(hglgEx)
+        assertEquals("01/12/2026", hglgEx!!.eventDateFormatted)
+        assertEquals(3, hglgEx.daysUntil)
+
+        org.junit.Assert.assertNotNull(smreCom)
+        assertEquals(2, smreCom!!.daysUntil)
+        // SMRE11 explicit Data-Ex is 03/12/2026 (5 days away) -> excluded from 3-day window, included in 5-day window
+        assertEquals(null, smreExIn3d)
+
+        val upcomingWithin5Days = com.example.domain.model.DividendDateAlertEvaluator.findUpcomingAlerts(
+            realPositions = listOf(smre),
+            marketAssets = MarketCatalogRepository.catalogAssets,
+            liveQuotesByTicker = mapOf("SMRE11" to smreQuote),
+            leadDays = 5,
+            notifyDataCom = false,
+            notifyDataEx = true,
+            referenceDateMillis = refCal.timeInMillis
+        )
+        assertEquals(1, upcomingWithin5Days.size)
+        assertEquals("03/12/2026", upcomingWithin5Days.first().eventDateFormatted)
+        assertEquals(5, upcomingWithin5Days.first().daysUntil)
+        assertEquals(6.0, upcomingWithin5Days.first().projectedDividendBrl, 0.01)
+    }
 }
 
 

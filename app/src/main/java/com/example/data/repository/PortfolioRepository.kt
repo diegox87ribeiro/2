@@ -455,10 +455,12 @@ class PortfolioRepository(
         operationType: OperationType,
         quantity: Double,
         unitPrice: Double,
-        notes: String
+        notes: String,
+        dateIso: String? = null
     ) {
         val total = quantity * unitPrice
-        val today = SimpleDateFormat("dd/MM/yyyy", Locale("pt", "BR")).format(Date())
+        val resolvedDate = dateIso?.trim()?.takeIf { it.isNotBlank() }
+            ?: SimpleDateFormat("dd/MM/yyyy", Locale("pt", "BR")).format(Date())
         portfolioDao.insertOperation(
             PortfolioOperationEntity(
                 portfolioType = portfolioType.name,
@@ -467,10 +469,14 @@ class PortfolioRepository(
                 quantity = quantity,
                 unitPrice = unitPrice,
                 totalValue = total,
-                dateIso = today,
+                dateIso = resolvedDate,
                 notes = notes
             )
         )
+    }
+
+    suspend fun deleteOperation(id: Long) {
+        portfolioDao.deleteOperationById(id)
     }
 
     suspend fun updatePosition(
@@ -633,5 +639,23 @@ class PortfolioRepository(
 
     suspend fun saveCachedLiveQuote(quote: LiveMarketQuote) {
         saveCachedLiveQuotes(listOf(quote))
+    }
+
+    suspend fun saveDividendDateAlertConfig(
+        enabled: Boolean,
+        leadDays: Int,
+        notifyDataCom: Boolean,
+        notifyDataEx: Boolean
+    ) {
+        prefs.saveDividendDateAlertConfig(
+            enabled = enabled,
+            leadDays = leadDays,
+            notifyDataCom = notifyDataCom,
+            notifyDataEx = notifyDataEx
+        )
+    }
+
+    suspend fun recordSentDividendAlertKeys(newKeys: Collection<String>) {
+        prefs.recordSentDividendAlertKeys(newKeys)
     }
 }

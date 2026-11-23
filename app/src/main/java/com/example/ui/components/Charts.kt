@@ -50,7 +50,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.model.AllocationSlice
 import com.example.domain.model.BenchmarkSeries
-import com.example.domain.model.MonthlyDividendPoint
 import com.example.ui.theme.AmberGold
 import com.example.ui.theme.ChartColors
 import com.example.ui.theme.CoralRed
@@ -546,112 +545,6 @@ fun TechnicalPriceChart(
     }
 }
 
-@Composable
-fun MonthlyDividendBarChart(
-    points: List<MonthlyDividendPoint>,
-    modifier: Modifier = Modifier
-) {
-    if (points.isEmpty()) return
-    var selectedIdx by remember(points) { mutableIntStateOf(points.lastIndex.coerceAtLeast(0)) }
-    val safeIdx = selectedIdx.coerceIn(0, points.lastIndex)
-    val selected = points[safeIdx]
-    val maxVal = (points.maxOfOrNull { maxOf(it.receivedBrl, it.projectedBrl) } ?: 1.0).coerceAtLeast(1.0)
-
-    Column(modifier = modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                "${selected.monthLabel}: Recebido ${formatBrl(selected.receivedBrl)}",
-                style = MaterialTheme.typography.labelMedium,
-                color = EmeraldPrimary
-            )
-            Text(
-                "Projetado ${formatBrl(selected.projectedBrl)}",
-                style = MonoValueStyle.copy(fontSize = MaterialTheme.typography.labelMedium.fontSize),
-                color = ElectricCyan
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(148.dp)
-                .pointerInput(points) {
-                    detectTapGestures { offset ->
-                        val colWidth = size.width / points.size.toFloat().coerceAtLeast(1f)
-                        val idx = (offset.x / colWidth).toInt().coerceIn(0, points.lastIndex)
-                        selectedIdx = idx
-                    }
-                }
-        ) {
-            val w = size.width
-            val h = size.height
-            val colW = w / points.size.toFloat()
-            val barW = (colW * 0.34f).coerceAtLeast(4f)
-
-            drawLine(
-                color = SubtleBorder,
-                start = Offset(0f, h - 2f),
-                end = Offset(w, h - 2f),
-                strokeWidth = 1.5f
-            )
-
-            points.forEachIndexed { idx, pt ->
-                val centerX = (idx + 0.5f) * colW
-                if (idx == safeIdx) {
-                    drawRect(
-                        color = EmeraldPrimary.copy(alpha = 0.08f),
-                        topLeft = Offset(idx * colW, 0f),
-                        size = Size(colW, h)
-                    )
-                }
-                val projH = ((pt.projectedBrl / maxVal) * (h - 14f)).toFloat().coerceAtLeast(if (pt.projectedBrl > 0) 4f else 0f)
-                val recH = ((pt.receivedBrl / maxVal) * (h - 14f)).toFloat().coerceAtLeast(if (pt.receivedBrl > 0) 4f else 0f)
-
-                if (projH > 0f) {
-                    drawRect(
-                        color = ElectricCyan.copy(alpha = if (idx == safeIdx) 0.95f else 0.55f),
-                        topLeft = Offset(centerX - barW - 1.5f, h - 2f - projH),
-                        size = Size(barW, projH)
-                    )
-                }
-                if (recH > 0f) {
-                    drawRect(
-                        color = EmeraldPrimary.copy(alpha = if (idx == safeIdx) 1.0f else 0.72f),
-                        topLeft = Offset(centerX + 1.5f, h - 2f - recH),
-                        size = Size(barW, recH)
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(4.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            points.forEachIndexed { idx, pt ->
-                Text(
-                    text = pt.monthLabel.take(1),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (idx == safeIdx) EmeraldPrimary else TextSecondary,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .clickable { selectedIdx = idx }
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                )
-            }
-        }
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "Verde = Recebido no ano • Ciano = Projetado • Toque em um mês para inspecionar",
-            style = MaterialTheme.typography.labelSmall,
-            color = TextSecondary
-        )
-    }
-}
 
 @Composable
 fun PillarRadarChart(

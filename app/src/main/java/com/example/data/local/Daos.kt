@@ -92,6 +92,9 @@ interface PortfolioDao {
     @Query("DELETE FROM portfolio_operations WHERE portfolioType = :portfolioType")
     suspend fun clearOperationsByType(portfolioType: String)
 
+    @Query("DELETE FROM portfolio_operations WHERE id = :id")
+    suspend fun deleteOperationById(id: Long)
+
     @Insert
     suspend fun insertImportHistory(history: ImportHistoryEntity): Long
 

@@ -32,6 +32,8 @@ import com.example.domain.model.AiAgentRole
 import com.example.domain.model.AiRecommendation
 import com.example.domain.model.AssetClass
 import com.example.domain.model.BenchmarkSeries
+import com.example.domain.model.DividendDateAlertEvaluator
+import com.example.domain.model.DividendDateEventType
 import com.example.domain.model.HhiRiskReport
 import com.example.domain.model.LiveMarketQuote
 import com.example.domain.model.LiveQuoteLookupState
@@ -43,6 +45,8 @@ import com.example.domain.model.PriceAlertCondition
 import com.example.domain.model.PriceTargetEvaluator
 import com.example.domain.model.ProfitChartConnectionState
 import com.example.domain.model.SimulationScenarioResult
+import com.example.notifications.DividendDateAlertWorkScheduler
+import com.example.notifications.DividendDateNotificationHelper
 import com.example.notifications.PriceAlertNotificationHelper
 import com.example.notifications.PriceAlertWorkScheduler
 import kotlinx.coroutines.CancellationException
@@ -245,6 +249,20 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             flushPendingPriceNotifications()
         }
+        viewModelScope.launch {
+            combine(
+                repository.preferencesFlow.map {
+                    it.dividendAlertsEnabled && (it.dividendAlertDataCom || it.dividendAlertDataEx)
+                },
+                repository.positionsFlow.map { list ->
+                    list.any { it.portfolioType == PortfolioType.REAL && it.quantity > 0.0 }
+                }
+            ) { enabled, hasReal -> enabled && hasReal }
+                .distinctUntilChanged()
+                .collect { shouldSchedule ->
+                    DividendDateAlertWorkScheduler.syncSchedule(getApplication(), shouldSchedule)
+                }
+        }
     }
 
     fun selectPortfolioType(type: PortfolioType) {
@@ -377,11 +395,20 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         operationType: OperationType,
         quantity: Double,
         unitPrice: Double,
-        notes: String
+        notes: String,
+        dateIso: String? = null
     ) {
         viewModelScope.launch {
-            repository.recordOperation(portfolioType, ticker, operationType, quantity, unitPrice, notes)
-            _statusBannerMessage.value = "Operação ${operationType.label} registrada localmente."
+            repository.recordOperation(portfolioType, ticker, operationType, quantity, unitPrice, notes, dateIso)
+            val dateSuffix = dateIso?.trim()?.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
+            _statusBannerMessage.value = "Operação ${operationType.label} de ${ticker.trim().uppercase()} registrada$dateSuffix."
+        }
+    }
+
+    fun deleteOperation(id: Long) {
+        viewModelScope.launch {
+            repository.deleteOperation(id)
+            _statusBannerMessage.value = "Lançamento removido localmente."
         }
     }
 
@@ -924,6 +951,121 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
             }
         } else if (notifyIfNoneTriggered) {
             _statusBannerMessage.value = "Cotações verificadas ao vivo: nenhuma meta atingida ainda."
+        }
+    }
+
+    fun updateDividendDateAlertConfig(
+        enabled: Boolean,
+        leadDays: Int,
+        notifyDataCom: Boolean,
+        notifyDataEx: Boolean
+    ) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                repository.saveDividendDateAlertConfig(
+                    enabled = enabled,
+                    leadDays = leadDays,
+                    notifyDataCom = notifyDataCom,
+                    notifyDataEx = notifyDataEx
+                )
+            }
+            val shouldRun = enabled && (notifyDataCom || notifyDataEx) && dashboardState.value.realPositions.isNotEmpty()
+            DividendDateAlertWorkScheduler.syncSchedule(getApplication(), shouldRun)
+            if (shouldRun) {
+                DividendDateAlertWorkScheduler.triggerImmediateCheck(getApplication())
+                _statusBannerMessage.value = "Alertas locais de Data-Com/Data-Ex ativados ($leadDays dia(s) antes)."
+            } else if (!enabled) {
+                _statusBannerMessage.value = "Alertas locais de Data-Com/Data-Ex desativados."
+            }
+        }
+    }
+
+    fun checkDividendDateAlertsNow() {
+        viewModelScope.launch {
+            val current = dashboardState.value
+            val prefs = current.preferences
+            if (current.realPositions.isEmpty()) {
+                _statusBannerMessage.value = "Adicione ou importe ativos na Carteira Real para monitorar Data-Com e Data-Ex."
+                return@launch
+            }
+            val upcoming = DividendDateAlertEvaluator.findUpcomingAlerts(
+                realPositions = current.realPositions,
+                marketAssets = current.marketAssets,
+                liveQuotesByTicker = current.liveQuotesByTicker,
+                leadDays = prefs.dividendAlertLeadDays,
+                notifyDataCom = prefs.dividendAlertDataCom,
+                notifyDataEx = prefs.dividendAlertDataEx
+            )
+            if (upcoming.isEmpty()) {
+                val nextEvent = DividendDateAlertEvaluator.findNextEventsForPortfolio(
+                    realPositions = current.realPositions,
+                    marketAssets = current.marketAssets,
+                    liveQuotesByTicker = current.liveQuotesByTicker,
+                    notifyDataCom = prefs.dividendAlertDataCom,
+                    notifyDataEx = prefs.dividendAlertDataEx
+                ).firstOrNull()
+                _statusBannerMessage.value = if (nextEvent != null) {
+                    "Nenhum evento nos próximos ${prefs.dividendAlertLeadDays} dia(s). Próximo: ${nextEvent.ticker} (${nextEvent.eventType.label} em ${nextEvent.eventDateFormatted}, em ${nextEvent.daysUntil} dias)."
+                } else {
+                    "Nenhum ativo da Carteira Real possui Data-Com cadastrada para monitorar."
+                }
+                return@launch
+            }
+
+            if (!DividendDateNotificationHelper.hasNotificationPermission(getApplication())) {
+                _statusBannerMessage.value = "Permita notificações nas configurações do Android para receber os alertas de Data-Com/Data-Ex."
+                return@launch
+            }
+
+            val deliveredKeys = mutableListOf<String>()
+            upcoming.forEach { alert ->
+                val ok = DividendDateNotificationHelper.sendDividendDateNotification(
+                    context = getApplication(),
+                    alert = alert
+                )
+                if (ok) deliveredKeys.add(alert.dedupeKey)
+            }
+            if (deliveredKeys.isNotEmpty()) {
+                withContext(Dispatchers.IO) {
+                    repository.recordSentDividendAlertKeys(deliveredKeys)
+                }
+                _statusBannerMessage.value = "${deliveredKeys.size} notificação(ões) de Data-Com/Data-Ex enviada(s)!"
+            } else {
+                _statusBannerMessage.value = "Não foi possível entregar as notificações locais no dispositivo."
+            }
+        }
+    }
+
+    fun sendTestDividendDateNotification() {
+        viewModelScope.launch {
+            val current = dashboardState.value
+            val prefs = current.preferences
+            val nextEvent = DividendDateAlertEvaluator.findNextEventsForPortfolio(
+                realPositions = current.realPositions,
+                marketAssets = current.marketAssets,
+                liveQuotesByTicker = current.liveQuotesByTicker,
+                notifyDataCom = prefs.dividendAlertDataCom || !prefs.dividendAlertDataEx,
+                notifyDataEx = prefs.dividendAlertDataEx
+            ).firstOrNull()
+
+            if (nextEvent == null) {
+                _statusBannerMessage.value = "Cadastre ou importe um ativo com Data-Com na Carteira Real para testar a notificação."
+                return@launch
+            }
+            if (!DividendDateNotificationHelper.hasNotificationPermission(getApplication())) {
+                _statusBannerMessage.value = "Permita notificações do Android para receber o alerta de teste."
+                return@launch
+            }
+            val delivered = DividendDateNotificationHelper.sendDividendDateNotification(
+                context = getApplication(),
+                alert = nextEvent,
+                isTestPreview = true
+            )
+            _statusBannerMessage.value = if (delivered) {
+                "Notificação de teste enviada: ${nextEvent.ticker} (${nextEvent.eventType.label} em ${nextEvent.eventDateFormatted})."
+            } else {
+                "Falha ao enviar notificação de teste. Verifique as permissões do app."
+            }
         }
     }
 }

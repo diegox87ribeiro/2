@@ -564,7 +564,22 @@ private fun MainScaffoldBody(
                                 navController.navigate(InvestRoutes.dataComGroupRoute(grp)) {
                                     launchSingleTop = true
                                 }
-                            }
+                            },
+                            onRecordDividend = { ticker, quantity, unitPrice, dateIso, notes ->
+                                viewModel.recordOperation(
+                                    portfolioType = PortfolioType.REAL,
+                                    ticker = ticker,
+                                    operationType = OperationType.PROVENTO,
+                                    quantity = quantity,
+                                    unitPrice = unitPrice,
+                                    notes = notes.ifBlank { "Provento recebido" },
+                                    dateIso = dateIso
+                                )
+                            },
+                            onDeleteDividendOperation = viewModel::deleteOperation,
+                            onUpdateDividendDateAlerts = viewModel::updateDividendDateAlertConfig,
+                            onCheckDividendDateAlertsNow = viewModel::checkDividendDateAlertsNow,
+                            onSendTestDividendDateAlert = viewModel::sendTestDividendDateNotification
                         )
                     }
                     composable(
