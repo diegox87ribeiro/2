@@ -82,9 +82,12 @@ import com.example.data.local.ImportHistoryEntity
 import com.example.domain.model.AssetClass
 import com.example.domain.model.ConsolidatedExecutiveReport
 import com.example.domain.model.DataComGroup
+import com.example.domain.model.FirestoreAssetAuditSummary
 import com.example.domain.model.HhiRiskReport
+import com.example.domain.model.MarketAsset
 import com.example.domain.model.OperationType
 import com.example.domain.model.OrderScreenshotRecognitionState
+import com.example.domain.model.PortfolioItemView
 import com.example.domain.model.PortfolioType
 import com.example.ui.screens.AiAgentsScreen
 import com.example.ui.screens.AlertsAndGoalsScreen
@@ -111,6 +114,9 @@ import com.example.ui.theme.ObsidianBg
 import com.example.ui.theme.SubtleBorder
 import com.example.ui.theme.TextSecondary
 import com.example.ui.viewmodel.AiAgentsViewModel
+import com.example.ui.viewmodel.AssetAuditRunState
+import com.example.ui.viewmodel.CloudAssetAuditsUiState
+import com.example.ui.viewmodel.CloudAssetsUiState
 import com.example.ui.viewmodel.CloudReportsUiState
 import com.example.ui.viewmodel.InvestDashboardState
 import com.example.ui.viewmodel.InvestViewModel
@@ -127,7 +133,15 @@ fun InvestAppRoot(
     isCloudSyncing: Boolean = false,
     cloudSyncMessage: String? = null,
     onClearCloudSyncMessage: () -> Unit = {},
-    onSyncConsolidatedReport: (ConsolidatedExecutiveReport, HhiRiskReport, ImportHistoryEntity?, Int) -> Unit = { _, _, _, _ -> }
+    onSyncConsolidatedReport: (ConsolidatedExecutiveReport, HhiRiskReport, ImportHistoryEntity?, Int) -> Unit = { _, _, _, _ -> },
+    cloudAssetsUiState: CloudAssetsUiState = CloudAssetsUiState.Success(emptyList()),
+    assetAuditsUiState: CloudAssetAuditsUiState = CloudAssetAuditsUiState.Success(emptyList()),
+    activeAuditRunState: AssetAuditRunState = AssetAuditRunState.Idle,
+    isSyncingAssets: Boolean = false,
+    onSyncAssetsToFirestore: (List<PortfolioItemView>, List<MarketAsset>) -> Unit = { _, _ -> },
+    onRunGeminiAssetAudit: (String) -> Unit = {},
+    onSelectSavedAudit: (FirestoreAssetAuditSummary) -> Unit = {},
+    onDismissAuditState: () -> Unit = {}
 ) {
     val navController = rememberNavController()
     val state by viewModel.dashboardState.collectAsStateWithLifecycle()
@@ -221,7 +235,15 @@ fun InvestAppRoot(
                     orderScreenshotState = orderScreenshotState,
                     cloudReportsUiState = cloudReportsUiState,
                     isCloudSyncing = isCloudSyncing,
-                    onSyncConsolidatedReport = onSyncConsolidatedReport
+                    onSyncConsolidatedReport = onSyncConsolidatedReport,
+                    cloudAssetsUiState = cloudAssetsUiState,
+                    assetAuditsUiState = assetAuditsUiState,
+                    activeAuditRunState = activeAuditRunState,
+                    isSyncingAssets = isSyncingAssets,
+                    onSyncAssetsToFirestore = onSyncAssetsToFirestore,
+                    onRunGeminiAssetAudit = onRunGeminiAssetAudit,
+                    onSelectSavedAudit = onSelectSavedAudit,
+                    onDismissAuditState = onDismissAuditState
                 )
             }
         } else {
@@ -270,7 +292,15 @@ fun InvestAppRoot(
                     orderScreenshotState = orderScreenshotState,
                     cloudReportsUiState = cloudReportsUiState,
                     isCloudSyncing = isCloudSyncing,
-                    onSyncConsolidatedReport = onSyncConsolidatedReport
+                    onSyncConsolidatedReport = onSyncConsolidatedReport,
+                    cloudAssetsUiState = cloudAssetsUiState,
+                    assetAuditsUiState = assetAuditsUiState,
+                    activeAuditRunState = activeAuditRunState,
+                    isSyncingAssets = isSyncingAssets,
+                    onSyncAssetsToFirestore = onSyncAssetsToFirestore,
+                    onRunGeminiAssetAudit = onRunGeminiAssetAudit,
+                    onSelectSavedAudit = onSelectSavedAudit,
+                    onDismissAuditState = onDismissAuditState
                 )
             }
         }
@@ -373,7 +403,15 @@ private fun MainScaffoldBody(
     orderScreenshotState: OrderScreenshotRecognitionState,
     cloudReportsUiState: CloudReportsUiState,
     isCloudSyncing: Boolean,
-    onSyncConsolidatedReport: (ConsolidatedExecutiveReport, HhiRiskReport, ImportHistoryEntity?, Int) -> Unit
+    onSyncConsolidatedReport: (ConsolidatedExecutiveReport, HhiRiskReport, ImportHistoryEntity?, Int) -> Unit,
+    cloudAssetsUiState: CloudAssetsUiState,
+    assetAuditsUiState: CloudAssetAuditsUiState,
+    activeAuditRunState: AssetAuditRunState,
+    isSyncingAssets: Boolean,
+    onSyncAssetsToFirestore: (List<PortfolioItemView>, List<MarketAsset>) -> Unit,
+    onRunGeminiAssetAudit: (String) -> Unit,
+    onSelectSavedAudit: (FirestoreAssetAuditSummary) -> Unit,
+    onDismissAuditState: () -> Unit
 ) {
     val isNestedDetailRoute = isDataComGroupRoute || isPortfolioClassRoute
     Scaffold(
@@ -708,7 +746,17 @@ private fun MainScaffoldBody(
                             aiAgentsViewModel = aiAgentsViewModel,
                             cloudReportsUiState = cloudReportsUiState,
                             isCloudSyncing = isCloudSyncing,
-                            onSyncConsolidatedReport = onSyncConsolidatedReport
+                            onSyncConsolidatedReport = onSyncConsolidatedReport,
+                            cloudAssetsUiState = cloudAssetsUiState,
+                            assetAuditsUiState = assetAuditsUiState,
+                            activeAuditRunState = activeAuditRunState,
+                            isSyncingAssets = isSyncingAssets,
+                            onSyncAssetsToFirestore = {
+                                onSyncAssetsToFirestore(state.realPositions, state.marketAssets)
+                            },
+                            onRunGeminiAssetAudit = onRunGeminiAssetAudit,
+                            onSelectSavedAudit = onSelectSavedAudit,
+                            onDismissAuditState = onDismissAuditState
                         )
                     }
                     composable(InvestRoutes.ROUTE_PROFITCHART) {

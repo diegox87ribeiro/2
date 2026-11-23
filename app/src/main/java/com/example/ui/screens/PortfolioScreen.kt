@@ -11,7 +11,6 @@ import com.example.ui.components.GroupBadge
 import com.example.ui.theme.EmeraldContainer
 
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -136,8 +135,8 @@ fun PortfolioScreen(
         if (uri != null) onImportUri(uri)
     }
 
-    val orderScreenshotPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia()
+    val orderDocumentPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) onRecognizeOrderScreenshot(uri)
     }
@@ -298,8 +297,8 @@ fun PortfolioScreen(
 
                     Button(
                         onClick = {
-                            orderScreenshotPicker.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            orderDocumentPicker.launch(
+                                arrayOf("application/pdf", "image/*")
                             )
                         },
                         enabled = orderScreenshotState !is OrderScreenshotRecognitionState.Analyzing,
@@ -314,7 +313,7 @@ fun PortfolioScreen(
                     ) {
                         Icon(Icons.Default.DocumentScanner, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("Ler Print e Lançar Ordem (IA)")
+                        Text("Ler Nota (PDF) ou Print (IA)")
                     }
 
                     Spacer(Modifier.height(8.dp))
@@ -606,8 +605,8 @@ fun PortfolioScreen(
             targetPortfolioType = selectedType,
             onDismiss = onDismissScreenshotReview,
             onPickAnotherImage = {
-                orderScreenshotPicker.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                orderDocumentPicker.launch(
+                    arrayOf("application/pdf", "image/*")
                 )
             },
             onConfirmLaunch = { orders, applyToPositions ->

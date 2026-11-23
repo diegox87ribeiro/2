@@ -1038,8 +1038,340 @@ class ConsolidatedReportsRobolectricTest {
             composeRule.onNodeWithTag("create_investment_goal_button").performClick()
             org.junit.Assert.assertEquals("Meta 100k", createdGoalTitle)
         }
+
+    @Test
+    fun `firestore asset audit JSON codec parses Gemini structured audit and UI card triggers audit and displays risks and opportunities`() {
+        val sampleAsset = com.example.domain.model.CloudAsset(
+            id = "HGLG11",
+            userId = "alice_123",
+            ticker = "HGLG11",
+            name = "CSHG Logística FII",
+            assetClass = com.example.domain.model.AssetClass.FII.name,
+            sector = "Logística",
+            quantity = 20.0,
+            averagePrice = 155.0,
+            currentPrice = 160.50,
+            dy12m = 8.65,
+            pvp = 1.02,
+            pl = 0.0,
+            roe = 0.0,
+            dailyLiquidityMillions = 14.2,
+            dataComDay = 30L,
+            cyclical = true,
+            demoData = false,
+            sourceLabel = "B3 Oficial",
+            dataBaseDate = "23/11/2026",
+            riskSummary = "Sensível à curva de juros longos."
+        )
+
+        val geminiJson = """
+            {
+              "resumoExecutivo": "Ativo logístico de elevada liquidez no Firestore com P/VP equilibrado e geração recorrente de proventos.",
+              "classificacaoRisco": "BAIXO",
+              "scoreAuditoria": 88,
+              "veredito": "FAVORAVEL",
+              "riscos": [
+                {
+                  "titulo": "Sensibilidade à curva de juros",
+                  "severidade": "MEDIA",
+                  "detalhe": "Abertura da NTN-B pressiona a cota no curto prazo.",
+                  "mitigacao": "Balancear com fundos de recebíveis indexados ao CDI."
+                }
+              ],
+              "oportunidades": [
+                {
+                  "titulo": "Renda mensal resiliente",
+                  "potencial": "ALTO",
+                  "detalhe": "DY de 8,65% a.a. com portfólio de galpões AAA.",
+                  "catalisador": "Revisão positiva de aluguéis e redução da Selic."
+                }
+              ],
+              "alertasInconsistencia": [
+                "P/L e ROE zerados por ser fundo imobiliário (esperado para classe FII)."
+              ],
+              "recomendacaoAuditoria": "Validar vacância física no último relatório gerencial na B3."
+            }
+        """.trimIndent()
+
+        val parsed = com.example.domain.model.AssetAuditJsonCodec.parseGeminiAuditResponse(
+            jsonText = geminiJson,
+            auditId = "audit_HGLG11_test",
+            asset = sampleAsset,
+            modelName = "gemini-3.8-flash"
+        )
+
+        org.junit.Assert.assertEquals("HGLG11", parsed.ticker)
+        org.junit.Assert.assertEquals(com.example.domain.model.AuditRiskLevel.BAIXO, parsed.riskLevel)
+        org.junit.Assert.assertEquals(com.example.domain.model.AuditVerdict.FAVORAVEL, parsed.verdict)
+        org.junit.Assert.assertEquals(88, parsed.auditScore)
+        org.junit.Assert.assertEquals(1, parsed.risks.size)
+        org.junit.Assert.assertEquals(1, parsed.opportunities.size)
+        org.junit.Assert.assertEquals(1, parsed.inconsistencyAlerts.size)
+
+        // Round-trip encode/decode via CloudAssetAudit
+        val cloudAudit = com.example.domain.model.CloudAssetAudit(
+            id = parsed.id,
+            userId = "alice_123",
+            assetId = parsed.assetId,
+            ticker = parsed.ticker,
+            assetName = parsed.assetName,
+            riskLevel = parsed.riskLevel.name,
+            auditScore = parsed.auditScore.toLong(),
+            verdict = parsed.verdict.name,
+            executiveSummary = parsed.executiveSummary,
+            risksJson = com.example.domain.model.AssetAuditJsonCodec.encodeRisks(parsed.risks),
+            opportunitiesJson = com.example.domain.model.AssetAuditJsonCodec.encodeOpportunities(parsed.opportunities),
+            inconsistencyAlertsJson = com.example.domain.model.AssetAuditJsonCodec.encodeStringList(parsed.inconsistencyAlerts),
+            auditRecommendation = parsed.auditRecommendation,
+            modelName = parsed.modelName,
+            sourceSnapshotLabel = parsed.sourceSnapshotLabel
+        )
+        val roundTripped = cloudAudit.toDomainSummary()
+        org.junit.Assert.assertEquals(parsed.risks.first().title, roundTripped.risks.first().title)
+        org.junit.Assert.assertEquals(parsed.opportunities.first().title, roundTripped.opportunities.first().title)
+
+        var auditedAssetId = ""
+        var syncClicked = false
+
+        composeRule.setContent {
+            InvestAiTheme {
+                androidx.compose.foundation.lazy.LazyColumn {
+                    item {
+                        com.example.ui.components.FirestoreAssetAuditCard(
+                            cloudAssetsUiState = com.example.ui.viewmodel.CloudAssetsUiState.Success(listOf(sampleAsset)),
+                            assetAuditsUiState = com.example.ui.viewmodel.CloudAssetAuditsUiState.Success(listOf(roundTripped)),
+                            activeAuditRunState = com.example.ui.viewmodel.AssetAuditRunState.Success(roundTripped),
+                            isSyncingAssets = false,
+                            onSyncAssetsToFirestore = { syncClicked = true },
+                            onRunGeminiAudit = { auditedAssetId = it },
+                            onSelectSavedAudit = {},
+                            onDismissAuditState = {}
+                        )
+                    }
+                }
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("firestore_asset_audit_card").assertExists()
+        composeRule.onNodeWithTag("sync_assets_firestore_button").performClick()
+        org.junit.Assert.assertTrue(syncClicked)
+
+        composeRule.onNodeWithTag("run_firestore_asset_audit_button").performClick()
+        org.junit.Assert.assertEquals("HGLG11", auditedAssetId)
+
+        composeRule.onNodeWithTag("firestore_audit_result_card").assertExists()
+        composeRule.onNodeWithText("88/100").assertExists()
+        composeRule.onNodeWithText("Sensibilidade à curva de juros").assertExists()
+        composeRule.onNodeWithText("Renda mensal resiliente").assertExists()
+        composeRule.onNodeWithTag("saved_firestore_audit_HGLG11").assertExists()
+    }
+
+    @Test
+    fun `OrderScreenshotReviewDialog displays PDF brokerage note summary, Day Trade and BMF badges, and launches selected orders`() {
+        val pdfResult = com.example.domain.model.OrderScreenshotRecognitionResult(
+            brokerHeader = "GENIAL CCTVM S/A",
+            documentKind = "NOTA_B3",
+            notesCount = 12,
+            totalFeesBrl = 14.35,
+            totalNetSettlementBrl = -4280.50,
+            orders = listOf(
+                com.example.domain.model.RecognizedOrderDraft(
+                    ticker = "ALOS3",
+                    operationType = com.example.domain.model.OperationType.COMPRA,
+                    quantity = 10.0,
+                    unitPrice = 26.92,
+                    totalValue = 269.20,
+                    dateIso = "12/11/2026",
+                    statusLabel = "Executada",
+                    brokerLabel = "GENIAL CCTVM S/A",
+                    specificationTitle = "ALLOS ON NM",
+                    noteNumber = "1656",
+                    marketSegment = "FRACIONARIO",
+                    isDayTrade = false,
+                    isExecuted = true,
+                    isIncomplete = false,
+                    selected = true,
+                    notes = "Consolidado de 10 execuções parciais"
+                ),
+                com.example.domain.model.RecognizedOrderDraft(
+                    ticker = "DEVA11",
+                    operationType = com.example.domain.model.OperationType.VENDA,
+                    quantity = 15.0,
+                    unitPrice = 24.40,
+                    totalValue = 366.00,
+                    dateIso = "16/11/2026",
+                    statusLabel = "Executada",
+                    brokerLabel = "GENIAL CCTVM S/A",
+                    specificationTitle = "FII DEVANT CI ER",
+                    noteNumber = "2104",
+                    marketSegment = "VISTA",
+                    isDayTrade = true,
+                    isExecuted = true,
+                    isIncomplete = false,
+                    selected = true
+                ),
+                com.example.domain.model.RecognizedOrderDraft(
+                    ticker = "WINZ26",
+                    operationType = com.example.domain.model.OperationType.COMPRA,
+                    quantity = 2.0,
+                    unitPrice = 167625.0,
+                    totalValue = 49.60,
+                    dateIso = "03/11/2026",
+                    statusLabel = "Executada",
+                    brokerLabel = "GENIAL CCTVM S/A",
+                    specificationTitle = "WIN Z26 16/12/2026",
+                    noteNumber = "534005",
+                    marketSegment = "BMF_FUTUROS",
+                    isDayTrade = true,
+                    isExecuted = true,
+                    isIncomplete = false,
+                    selected = true
+                )
+            ),
+            warnings = emptyList()
+        )
+
+        var launchedOrders: List<com.example.domain.model.RecognizedOrderDraft> = emptyList()
+
+        composeRule.setContent {
+            InvestAiTheme {
+                com.example.ui.screens.OrderScreenshotReviewDialog(
+                    state = com.example.domain.model.OrderScreenshotRecognitionState.Review(
+                        result = pdfResult,
+                        imageUriString = "content://downloads/NotaCorretagem_01-11-26_30-11-26.pdf"
+                    ),
+                    targetPortfolioType = com.example.domain.model.PortfolioType.REAL,
+                    onDismiss = {},
+                    onPickAnotherImage = {},
+                    onConfirmLaunch = { orders, _ -> launchedOrders = orders }
+                )
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("order_screenshot_dialog").assertExists()
+        composeRule.onNodeWithText("Revisar Nota de Corretagem (PDF)").assertExists()
+        composeRule.onNodeWithTag("brokerage_note_summary_card").assertExists()
+        composeRule.onNodeWithTag("screenshot_toggle_all_button").assertExists()
+        composeRule.onNodeWithTag("confirm_screenshot_orders_button").performClick()
+
+        org.junit.Assert.assertEquals(3, launchedOrders.size)
+        org.junit.Assert.assertEquals("ALOS3", launchedOrders[0].ticker)
+        org.junit.Assert.assertEquals("DEVA11", launchedOrders[1].ticker)
+        org.junit.Assert.assertTrue(launchedOrders[1].isDayTrade)
+        org.junit.Assert.assertEquals("WINZ26", launchedOrders[2].ticker)
+        org.junit.Assert.assertTrue(launchedOrders[2].isFuturesContract)
+        org.junit.Assert.assertEquals(49.60, launchedOrders[2].computedTotalValue, 0.01)
+    }
+
+    @Test
+    fun `OrderScreenshotJsonParser parses Genial B3 RV and BMF PDF JSON payloads with consolidation and ticker resolution`() {
+        val b3NoteJson = """
+            {
+              "documentKind": "NOTA_B3",
+              "brokerHeader": "GENIAL CCTVM S/A",
+              "notesCount": 2,
+              "totalFeesBrl": 4.82,
+              "totalNetSettlementBrl": -1250.40,
+              "warnings": [],
+              "orders": [
+                {
+                  "ticker": "",
+                  "specificationTitle": "ALLOS ON NM",
+                  "side": "COMPRA",
+                  "marketSegment": "FRACIONARIO",
+                  "isDayTrade": false,
+                  "noteNumber": "1656",
+                  "quantity": 2.0,
+                  "unitPrice": 26.90,
+                  "totalValue": 53.80,
+                  "dateBr": "12/11/2026",
+                  "status": "Executada",
+                  "orderType": "Normal",
+                  "isIncomplete": false
+                },
+                {
+                  "ticker": "",
+                  "specificationTitle": "ALLOS ON NM",
+                  "side": "COMPRA",
+                  "marketSegment": "FRACIONARIO",
+                  "isDayTrade": false,
+                  "noteNumber": "1656",
+                  "quantity": 3.0,
+                  "unitPrice": 27.00,
+                  "totalValue": 81.00,
+                  "dateBr": "12/11/2026",
+                  "status": "Executada",
+                  "orderType": "Normal",
+                  "isIncomplete": false
+                },
+                {
+                  "ticker": "",
+                  "specificationTitle": "FII DEVANT CI ER",
+                  "side": "VENDA",
+                  "marketSegment": "VISTA",
+                  "isDayTrade": true,
+                  "noteNumber": "2104",
+                  "quantity": 10.0,
+                  "unitPrice": 24.50,
+                  "totalValue": 245.00,
+                  "dateBr": "16/11/2026",
+                  "status": "Executada",
+                  "orderType": "Day Trade",
+                  "isIncomplete": false
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val b3Parsed = com.example.domain.model.OrderScreenshotJsonParser.parse(b3NoteJson)
+        org.junit.Assert.assertEquals("NOTA_B3", b3Parsed.documentKind)
+        org.junit.Assert.assertTrue(b3Parsed.isBrokerageNote)
+        org.junit.Assert.assertEquals(2, b3Parsed.notesCount)
+        org.junit.Assert.assertEquals(4.82, b3Parsed.totalFeesBrl, 0.001)
+        org.junit.Assert.assertEquals(2, b3Parsed.orders.size)
+
+        val alos = b3Parsed.orders.first { it.ticker == "ALOS3" }
+        org.junit.Assert.assertEquals(5.0, alos.quantity, 0.001)
+        org.junit.Assert.assertEquals(26.96, alos.unitPrice, 0.001)
+        org.junit.Assert.assertEquals(134.80, alos.computedTotalValue, 0.01)
+
+        val bmfJson = """
+            {
+              "documentKind": "NOTA_BMF",
+              "brokerHeader": "GENIAL CCTVM S/A",
+              "notesCount": 1,
+              "totalFeesBrl": 1.19,
+              "totalNetSettlementBrl": 18.81,
+              "warnings": [],
+              "orders": [
+                {
+                  "ticker": "WIN Z26",
+                  "specificationTitle": "WIN Z26 16/12/2026",
+                  "side": "VENDA",
+                  "marketSegment": "BMF_FUTUROS",
+                  "isDayTrade": true,
+                  "noteNumber": "534005",
+                  "quantity": 2.0,
+                  "unitPrice": 167625.0,
+                  "totalValue": 49.60,
+                  "dateBr": "03/11/2026",
+                  "status": "Executada",
+                  "orderType": "Day Trade",
+                  "isIncomplete": false
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val bmfParsed = com.example.domain.model.OrderScreenshotJsonParser.parse(bmfJson)
+        org.junit.Assert.assertEquals("NOTA_BMF", bmfParsed.documentKind)
+        val win = bmfParsed.orders.first()
+        org.junit.Assert.assertEquals("WINZ26", win.ticker)
+        org.junit.Assert.assertTrue(win.isFuturesContract)
+        org.junit.Assert.assertEquals(167625.0, win.unitPrice, 0.01)
+        org.junit.Assert.assertEquals(49.60, win.computedTotalValue, 0.01)
+    }
 }
-
-
-
 

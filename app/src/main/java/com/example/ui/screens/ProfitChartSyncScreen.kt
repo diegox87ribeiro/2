@@ -1,7 +1,6 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -101,8 +100,8 @@ fun ProfitChartSyncScreen(
         }
     }
 
-    val orderScreenshotPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia()
+    val orderDocumentPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
             onRecognizeOrderScreenshot(uri)
@@ -113,8 +112,10 @@ fun ProfitChartSyncScreen(
         state.operations.filter {
             it.externalRefId.startsWith("PROFIT:") ||
                 it.externalRefId.startsWith("PRINT:") ||
+                it.externalRefId.startsWith("NOTA:") ||
                 it.notes.contains("ProfitChart", ignoreCase = true) ||
-                it.notes.contains("Print IA", ignoreCase = true)
+                it.notes.contains("Print IA", ignoreCase = true) ||
+                it.notes.contains("Nota Corretagem", ignoreCase = true)
         }
     }
 
@@ -382,18 +383,18 @@ fun ProfitChartSyncScreen(
 
         item {
             FintechCard(borderColor = EmeraldPrimary.copy(alpha = 0.45f)) {
-                Text("Reconhecer Print do Profit Mobile / Corretora (IA)", style = MaterialTheme.typography.titleMedium)
+                Text("Ler Nota de Corretagem (PDF) ou Print (IA)", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Envie um print da lista de ordens executadas (ex.: Profit Mobile, Genial, XP, Rico, BTG). A IA lê os ativos, selos de compra/venda (5C, 10C, 10V), preço médio e data para você revisar e lançar na Carteira Real.",
+                    "Envie uma Nota de Corretagem em PDF (SINACOR B3 Ações/FIIs ou BM&F Futuros WIN/WDO) ou um print da lista de ordens executadas. A IA interpreta todos os pregões, converte especificações em tickers e consolida parciais para revisão e lançamento.",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary
                 )
                 Spacer(Modifier.height(10.dp))
                 Button(
                     onClick = {
-                        orderScreenshotPicker.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        orderDocumentPicker.launch(
+                            arrayOf("application/pdf", "image/*")
                         )
                     },
                     enabled = orderScreenshotState !is OrderScreenshotRecognitionState.Analyzing,
@@ -408,7 +409,7 @@ fun ProfitChartSyncScreen(
                 ) {
                     Icon(Icons.Default.DocumentScanner, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("Ler Print de Ordens (IA)")
+                    Text("Ler Nota (PDF) ou Print (IA)")
                 }
             }
         }
@@ -518,8 +519,8 @@ fun ProfitChartSyncScreen(
             targetPortfolioType = PortfolioType.REAL,
             onDismiss = onDismissScreenshotReview,
             onPickAnotherImage = {
-                orderScreenshotPicker.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                orderDocumentPicker.launch(
+                    arrayOf("application/pdf", "image/*")
                 )
             },
             onConfirmLaunch = { orders, applyPositions ->

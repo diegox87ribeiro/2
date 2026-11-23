@@ -174,3 +174,214 @@ test("Shadow update with ghost field and invalid enum are rejected", async () =>
       })
   );
 });
+
+test("Authenticated owner can create, update, get, list, and delete cloud assets", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const assetRef = aliceDb.collection("users").doc(ALICE_UID).collection("assets").doc("PETR4");
+  const created = new Date(Date.now() - 10000);
+
+  await assertSucceeds(
+    assetRef.set({
+      userId: ALICE_UID,
+      ticker: "PETR4",
+      name: "Petrobras PN",
+      assetClass: "ACOES_BR",
+      sector: "Petróleo e Gás",
+      quantity: 120.0,
+      averagePrice: 35.4,
+      currentPrice: 38.9,
+      dy12m: 14.2,
+      pvp: 1.25,
+      pl: 4.8,
+      roe: 26.5,
+      dailyLiquidityMillions: 1850.0,
+      dataComDay: 12,
+      cyclical: true,
+      demoData: false,
+      sourceLabel: "Carteira Real B3",
+      dataBaseDate: "2026-11-23",
+      riskSummary: "Sensibilidade ao Brent e política de dividendos.",
+      createdAt: created,
+      updatedAt: created,
+    })
+  );
+
+  // Mirror Kotlin partial update on upsertCloudAsset (preserves userId, ticker, createdAt)
+  await assertSucceeds(
+    assetRef.update({
+      currentPrice: 39.5,
+      dy12m: 13.8,
+      updatedAt: pastTs(),
+    })
+  );
+
+  // Mirror Kotlin observeCloudAssets query & getCloudAsset
+  await assertSucceeds(assetRef.get());
+  await assertSucceeds(
+    aliceDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("assets")
+      .orderBy("updatedAt", "desc")
+      .limit(100)
+      .get()
+  );
+
+  // Immutable createdAt and ticker mutations must fail
+  await assertFails(
+    assetRef.update({
+      createdAt: pastTs(),
+      updatedAt: pastTs(),
+    })
+  );
+  await assertFails(
+    assetRef.update({
+      ticker: "VALE3",
+      updatedAt: pastTs(),
+    })
+  );
+
+  // Future timestamp tampering must fail
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("assets").doc("VALE3").set({
+      userId: ALICE_UID,
+      ticker: "VALE3",
+      name: "Vale ON",
+      assetClass: "ACOES_BR",
+      sector: "Mineração",
+      quantity: 50,
+      averagePrice: 60,
+      currentPrice: 62,
+      dy12m: 9.5,
+      pvp: 1.3,
+      pl: 6.2,
+      roe: 19.0,
+      dailyLiquidityMillions: 1500,
+      dataComDay: 0,
+      cyclical: false,
+      demoData: false,
+      sourceLabel: "B3",
+      dataBaseDate: "2026-11-23",
+      riskSummary: "",
+      createdAt: new Date(Date.now() + 60000),
+      updatedAt: pastTs(),
+    })
+  );
+
+  await assertSucceeds(assetRef.delete());
+});
+
+test("Unauthenticated and cross-user access to assets and asset_audits is rejected", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const now = pastTs();
+
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("assets").doc("HGLG11").set({
+      userId: ALICE_UID,
+      ticker: "HGLG11",
+      name: "CSHG Logística",
+      assetClass: "FII",
+      sector: "Logística",
+      quantity: 15,
+      averagePrice: 158.0,
+      currentPrice: 162.5,
+      dy12m: 8.6,
+      pvp: 1.02,
+      pl: 0,
+      roe: 0,
+      dailyLiquidityMillions: 12.4,
+      dataComDay: 30,
+      cyclical: true,
+      demoData: false,
+      sourceLabel: "B3",
+      dataBaseDate: "2026-11-23",
+      riskSummary: "Vacância logística controlada.",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("asset_audits").doc("audit_HGLG11_1").set({
+      userId: ALICE_UID,
+      assetId: "HGLG11",
+      ticker: "HGLG11",
+      assetName: "CSHG Logística",
+      riskLevel: "BAIXO",
+      auditScore: 86,
+      verdict: "FAVORAVEL",
+      executiveSummary: "Fundo logístico de alta liquidez com P/VP próximo ao valor patrimonial.",
+      risksJson: '[{"titulo":"Juros longos","severidade":"MEDIA","detalhe":"Pressão na NTN-B","mitigacao":"Diversificar indexadores"}]',
+      opportunitiesJson: '[{"titulo":"Renda recorrente","potencial":"ALTO","detalhe":"DY consistente","catalisador":"Novos contratos atípicos"}]',
+      inconsistencyAlertsJson: "[]",
+      auditRecommendation: "Acompanhar relatório gerencial mensal na B3.",
+      modelName: "gemini-3.8-flash",
+      sourceSnapshotLabel: "B3 • 2026-11-23",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Mirror Kotlin observeAssetAudits query and ticker-filtered agent_insights query
+  await assertSucceeds(
+    aliceDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("asset_audits")
+      .orderBy("createdAt", "desc")
+      .limit(25)
+      .get()
+  );
+  await assertSucceeds(
+    aliceDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("agent_insights")
+      .where("ticker", "==", "HGLG11")
+      .limit(6)
+      .get()
+  );
+
+  // Asset audits are immutable (update rejected)
+  await assertFails(
+    aliceDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("asset_audits")
+      .doc("audit_HGLG11_1")
+      .update({ verdict: "EVITAR", updatedAt: pastTs() })
+  );
+
+  // Invalid riskLevel enum or @DocumentId `id` field rejected
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("asset_audits").doc("audit_bad").set({
+      id: "audit_bad",
+      userId: ALICE_UID,
+      assetId: "HGLG11",
+      ticker: "HGLG11",
+      assetName: "CSHG Logística",
+      riskLevel: "EXTREMO",
+      auditScore: 50,
+      verdict: "NEUTRO",
+      executiveSummary: "Resumo",
+      risksJson: "[]",
+      opportunitiesJson: "[]",
+      inconsistencyAlertsJson: "[]",
+      auditRecommendation: "Verificar",
+      modelName: "gemini-3.8-flash",
+      sourceSnapshotLabel: "B3",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Unauthenticated and cross-user checks
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  await assertFails(unauthDb.collection("users").doc(ALICE_UID).collection("assets").get());
+  await assertFails(unauthDb.collection("users").doc(ALICE_UID).collection("asset_audits").get());
+
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  await assertFails(bobDb.collection("users").doc(ALICE_UID).collection("assets").doc("HGLG11").get());
+  await assertFails(bobDb.collection("users").doc(ALICE_UID).collection("asset_audits").get());
+});
+

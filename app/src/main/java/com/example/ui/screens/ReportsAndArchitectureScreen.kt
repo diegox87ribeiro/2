@@ -50,10 +50,12 @@ import com.example.data.local.ImportHistoryEntity
 import com.example.domain.model.AiAgentRole
 import com.example.domain.model.ConsolidatedExecutiveReport
 import com.example.domain.model.ConsolidatedReportAggregator
+import com.example.domain.model.FirestoreAssetAuditSummary
 import com.example.domain.model.HhiRiskReport
 import com.example.ui.components.DataDisclaimerBanner
 import com.example.ui.components.FilterChipBar
 import com.example.ui.components.FintechCard
+import com.example.ui.components.FirestoreAssetAuditCard
 import com.example.ui.components.formatBrl
 import com.example.ui.theme.AmberGold
 import com.example.ui.theme.CoralRed
@@ -63,6 +65,9 @@ import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.TextSecondary
 import com.example.ui.viewmodel.AiAgentsViewModel
+import com.example.ui.viewmodel.AssetAuditRunState
+import com.example.ui.viewmodel.CloudAssetAuditsUiState
+import com.example.ui.viewmodel.CloudAssetsUiState
 import com.example.ui.viewmodel.CloudReportsUiState
 import com.example.ui.viewmodel.ConsolidatedRunState
 import com.example.ui.viewmodel.InvestDashboardState
@@ -77,7 +82,15 @@ fun ReportsAndArchitectureScreen(
     aiAgentsViewModel: AiAgentsViewModel = viewModel(),
     cloudReportsUiState: CloudReportsUiState = CloudReportsUiState.Success(emptyList()),
     isCloudSyncing: Boolean = false,
-    onSyncConsolidatedReport: (ConsolidatedExecutiveReport, HhiRiskReport, ImportHistoryEntity?, Int) -> Unit = { _, _, _, _ -> }
+    onSyncConsolidatedReport: (ConsolidatedExecutiveReport, HhiRiskReport, ImportHistoryEntity?, Int) -> Unit = { _, _, _, _ -> },
+    cloudAssetsUiState: CloudAssetsUiState = CloudAssetsUiState.Success(emptyList()),
+    assetAuditsUiState: CloudAssetAuditsUiState = CloudAssetAuditsUiState.Success(emptyList()),
+    activeAuditRunState: AssetAuditRunState = AssetAuditRunState.Idle,
+    isSyncingAssets: Boolean = false,
+    onSyncAssetsToFirestore: () -> Unit = {},
+    onRunGeminiAssetAudit: (String) -> Unit = {},
+    onSelectSavedAudit: (FirestoreAssetAuditSummary) -> Unit = {},
+    onDismissAuditState: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val savedHistory by aiAgentsViewModel.savedHistory.collectAsStateWithLifecycle()
@@ -201,6 +214,19 @@ fun ReportsAndArchitectureScreen(
                     else -> Unit
                 }
             }
+        }
+
+        item {
+            FirestoreAssetAuditCard(
+                cloudAssetsUiState = cloudAssetsUiState,
+                assetAuditsUiState = assetAuditsUiState,
+                activeAuditRunState = activeAuditRunState,
+                isSyncingAssets = isSyncingAssets,
+                onSyncAssetsToFirestore = onSyncAssetsToFirestore,
+                onRunGeminiAudit = onRunGeminiAssetAudit,
+                onSelectSavedAudit = onSelectSavedAudit,
+                onDismissAuditState = onDismissAuditState
+            )
         }
 
         item {

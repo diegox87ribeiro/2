@@ -79,6 +79,49 @@ service cloud.firestore {
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
+    function isValidCloudAsset(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.ticker is string && data.ticker.size() >= 1 && data.ticker.size() <= 24 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+             data.assetClass in ['ACOES_BR', 'FII', 'FIAGRO', 'ETF', 'RENDA_FIXA', 'CRIPTO'] &&
+             data.sector is string && data.sector.size() <= 100 &&
+             data.quantity is number && data.quantity >= 0 &&
+             data.averagePrice is number && data.averagePrice >= 0 &&
+             data.currentPrice is number && data.currentPrice >= 0 &&
+             data.dy12m is number && data.dy12m >= 0 && data.dy12m <= 500 &&
+             data.pvp is number && data.pvp >= 0 && data.pvp <= 1000 &&
+             data.pl is number && data.pl >= -10000 && data.pl <= 10000 &&
+             data.roe is number && data.roe >= -500 && data.roe <= 1000 &&
+             data.dailyLiquidityMillions is number && data.dailyLiquidityMillions >= 0 &&
+             data.dataComDay is int && data.dataComDay >= 0 && data.dataComDay <= 31 &&
+             data.cyclical is bool &&
+             data.demoData is bool &&
+             data.sourceLabel is string && data.sourceLabel.size() <= 300 &&
+             data.dataBaseDate is string && data.dataBaseDate.size() <= 64 &&
+             data.riskSummary is string && data.riskSummary.size() <= 1500 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidAssetAuditSummary(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.assetId is string && data.assetId.size() >= 1 && data.assetId.size() <= 64 &&
+             data.ticker is string && data.ticker.size() >= 1 && data.ticker.size() <= 24 &&
+             data.assetName is string && data.assetName.size() >= 1 && data.assetName.size() <= 120 &&
+             data.riskLevel in ['BAIXO', 'MODERADO', 'ALTO', 'CRITICO'] &&
+             data.auditScore is int && data.auditScore >= 0 && data.auditScore <= 100 &&
+             data.verdict in ['FAVORAVEL', 'NEUTRO', 'CAUTELA', 'EVITAR'] &&
+             data.executiveSummary is string && data.executiveSummary.size() >= 1 && data.executiveSummary.size() <= 4000 &&
+             data.risksJson is string && data.risksJson.size() >= 2 && data.risksJson.size() <= 6000 &&
+             data.opportunitiesJson is string && data.opportunitiesJson.size() >= 2 && data.opportunitiesJson.size() <= 6000 &&
+             data.inconsistencyAlertsJson is string && data.inconsistencyAlertsJson.size() >= 2 && data.inconsistencyAlertsJson.size() <= 3000 &&
+             data.auditRecommendation is string && data.auditRecommendation.size() >= 1 && data.auditRecommendation.size() <= 1500 &&
+             data.modelName is string && data.modelName.size() >= 1 && data.modelName.size() <= 64 &&
+             data.sourceSnapshotLabel is string && data.sourceSnapshotLabel.size() <= 300 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
     match /users/{userId} {
       allow get: if isValidId(userId) && isOwner(userId);
       allow list: if false;
@@ -157,6 +200,67 @@ service cloud.firestore {
 
         allow update: if false;
         allow delete: if isValidId(userId) && isValidId(snapshotId) && isOwner(userId);
+      }
+
+      match /assets/{assetId} {
+        allow get: if isValidId(userId) && isValidId(assetId) && isOwner(userId);
+        allow list: if isValidId(userId) && isOwner(userId);
+
+        allow create: if isValidId(userId) && isValidId(assetId) && isOwner(userId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'ticker', 'name', 'assetClass', 'sector',
+                           'quantity', 'averagePrice', 'currentPrice', 'dy12m',
+                           'pvp', 'pl', 'roe', 'dailyLiquidityMillions', 'dataComDay',
+                           'cyclical', 'demoData', 'sourceLabel', 'dataBaseDate',
+                           'riskSummary', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'ticker', 'name', 'assetClass', 'sector',
+                           'quantity', 'averagePrice', 'currentPrice', 'dy12m',
+                           'pvp', 'pl', 'roe', 'dailyLiquidityMillions', 'dataComDay',
+                           'cyclical', 'demoData', 'sourceLabel', 'dataBaseDate',
+                           'riskSummary', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidCloudAsset(incoming(), userId);
+
+        allow update: if isValidId(userId) && isValidId(assetId) && isOwner(userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().ticker == existing().ticker &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidCloudAsset(incoming(), userId) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'name', 'assetClass', 'sector', 'quantity', 'averagePrice',
+                           'currentPrice', 'dy12m', 'pvp', 'pl', 'roe',
+                           'dailyLiquidityMillions', 'dataComDay', 'cyclical', 'demoData',
+                           'sourceLabel', 'dataBaseDate', 'riskSummary', 'updatedAt'
+                         ]);
+
+        allow delete: if isValidId(userId) && isValidId(assetId) && isOwner(userId);
+      }
+
+      match /asset_audits/{auditId} {
+        allow get: if isValidId(userId) && isValidId(auditId) && isOwner(userId);
+        allow list: if isValidId(userId) && isOwner(userId);
+
+        allow create: if isValidId(userId) && isValidId(auditId) && isOwner(userId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'assetId', 'ticker', 'assetName', 'riskLevel',
+                           'auditScore', 'verdict', 'executiveSummary', 'risksJson',
+                           'opportunitiesJson', 'inconsistencyAlertsJson',
+                           'auditRecommendation', 'modelName', 'sourceSnapshotLabel',
+                           'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'assetId', 'ticker', 'assetName', 'riskLevel',
+                           'auditScore', 'verdict', 'executiveSummary', 'risksJson',
+                           'opportunitiesJson', 'inconsistencyAlertsJson',
+                           'auditRecommendation', 'modelName', 'sourceSnapshotLabel',
+                           'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidAssetAuditSummary(incoming(), userId);
+
+        allow update: if false;
+        allow delete: if isValidId(userId) && isValidId(auditId) && isOwner(userId);
       }
     }
   }

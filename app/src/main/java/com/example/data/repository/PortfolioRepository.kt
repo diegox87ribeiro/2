@@ -593,7 +593,7 @@ class PortfolioRepository(
                 launchedCount = 0,
                 skippedDuplicatesCount = duplicates,
                 updatedPositionsCount = 0,
-                message = "Todas as $duplicates ordem(ns) selecionadas deste print já foram lançadas anteriormente."
+                message = "Todas as $duplicates ordem(ns) selecionadas desta nota/print já foram lançadas anteriormente."
             )
         }
 
@@ -601,11 +601,24 @@ class PortfolioRepository(
             val cleanTicker = order.ticker.trim().uppercase()
             val total = order.computedTotalValue
             val resolvedDate = order.dateIso.trim().ifBlank { today }
+            val isBrokerageNote = order.noteNumber.isNotBlank() ||
+                order.specificationTitle.isNotBlank() ||
+                order.isFuturesContract
+            val originLabel = if (isBrokerageNote) "Nota Corretagem IA" else "Print IA"
             val detailNotes = buildList {
                 if (order.brokerLabel.isNotBlank()) add(order.brokerLabel)
-                add("Print IA")
-                if (order.orderTypeLabel.isNotBlank()) add(order.orderTypeLabel)
+                add(originLabel)
+                if (order.noteNumber.isNotBlank()) add("Nota #${order.noteNumber}")
+                if (order.isFuturesContract) add("BM&F")
+                if (order.isDayTrade) add("Day Trade")
+                if (order.orderTypeLabel.isNotBlank() && !order.orderTypeLabel.equals("Day Trade", ignoreCase = true)) {
+                    add(order.orderTypeLabel)
+                }
                 if (order.timeLabel.isNotBlank()) add(order.timeLabel)
+                if (order.feesBrl > 0.0) {
+                    add("Taxas R$ ${String.format(Locale("pt", "BR"), "%.2f", order.feesBrl)}")
+                }
+                if (order.notes.isNotBlank()) add(order.notes)
             }.joinToString(" • ")
 
             PortfolioOperationEntity(
@@ -624,18 +637,27 @@ class PortfolioRepository(
         portfolioDao.insertOperations(opEntities)
 
         var updatedPositionsCount = 0
+        var futuresLoggedOnlyCount = 0
         if (applyToPositions) {
             val currentMap = portfolioDao.getPositionsByType(portfolioType.name)
                 .associateBy { it.ticker.trim().uppercase() }
                 .toMutableMap()
 
             for (order in newOrders) {
+                if (order.isFuturesContract) {
+                    // Contratos futuros BM&F (ex.: WINZ26, WDO) são cotados em pontos e liquidados por ajuste diário,
+                    // portanto ficam registrados no histórico de operações sem distorcer a custódia à vista.
+                    futuresLoggedOnlyCount++
+                    continue
+                }
                 val cleanTicker = order.ticker.trim().uppercase()
                 val existing = currentMap[cleanTicker]
+                val isBrokerageNote = order.noteNumber.isNotBlank() || order.specificationTitle.isNotBlank()
+                val originTag = if (isBrokerageNote) "Nota IA" else "Print IA"
                 val sourceTag = if (order.brokerLabel.isNotBlank()) {
-                    "Print IA (${order.brokerLabel})"
+                    "$originTag (${order.brokerLabel})"
                 } else {
-                    "Print IA (${portfolioType.label})"
+                    "$originTag (${portfolioType.label})"
                 }
 
                 when (order.operationType) {
@@ -648,7 +670,7 @@ class PortfolioRepository(
                             val inserted = PortfolioPositionEntity(
                                 portfolioType = portfolioType.name,
                                 ticker = cleanTicker,
-                                name = cleanTicker,
+                                name = order.specificationTitle.ifBlank { cleanTicker },
                                 assetClass = assetClass.name,
                                 quantity = order.quantity,
                                 averagePrice = order.unitPrice,
@@ -742,8 +764,9 @@ class PortfolioRepository(
         }
 
         val posSuffix = if (updatedPositionsCount > 0) " e $updatedPositionsCount posição(ões) atualizada(s)" else ""
+        val bmfSuffix = if (futuresLoggedOnlyCount > 0) " • $futuresLoggedOnlyCount operação(ões) BM&F registrada(s) no histórico" else ""
         val dupSuffix = if (duplicates > 0) " ($duplicates duplicada(s) ignorada(s))" else ""
-        val msg = "${newOrders.size} ordem(ns) lançada(s) na ${portfolioType.label}$posSuffix$dupSuffix."
+        val msg = "${newOrders.size} ordem(ns) lançada(s) na ${portfolioType.label}$posSuffix$bmfSuffix$dupSuffix."
 
         return com.example.domain.model.OrderScreenshotLaunchSummary(
             launchedCount = newOrders.size,

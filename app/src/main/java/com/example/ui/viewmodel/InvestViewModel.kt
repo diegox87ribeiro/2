@@ -1182,21 +1182,30 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         }.getOrDefault(false)
         if (!firebaseReady) {
             _orderScreenshotState.value = OrderScreenshotRecognitionState.Error(
-                message = "O reconhecimento de prints por IA requer Firebase AI Logic ativo neste aplicativo.",
+                message = "A leitura de notas de corretagem (PDF) e prints por IA requer Firebase AI Logic ativo neste aplicativo.",
                 lastImageUriString = uri.toString()
             )
             return
         }
 
         viewModelScope.launch {
+            val isPdf = withContext(Dispatchers.IO) { orderScreenshotRecognizer.isPdfUri(uri) }
             _orderScreenshotState.value = OrderScreenshotRecognitionState.Analyzing(
-                statusLabel = "Analisando print de ordens com Gemini..."
+                statusLabel = if (isPdf) {
+                    "Lendo Nota de Corretagem (PDF) com Gemini..."
+                } else {
+                    "Analisando print de ordens com Gemini..."
+                }
             )
             try {
                 val result = orderScreenshotRecognizer.recognizeFromUri(uri)
                 if (result.orders.isEmpty()) {
                     val hint = result.warnings.firstOrNull()
-                        ?: "Nenhuma ordem de compra ou venda foi identificada neste print. Envie uma captura da tela de Ordens Executadas ou Nota de Corretagem."
+                        ?: if (isPdf) {
+                            "Nenhuma operação de compra ou venda foi encontrada neste PDF. Selecione uma Nota de Corretagem SINACOR (B3 ou BM&F) válida."
+                        } else {
+                            "Nenhuma ordem de compra ou venda foi identificada neste print. Envie uma captura de Ordens Executadas ou uma Nota de Corretagem em PDF."
+                        }
                     _orderScreenshotState.value = OrderScreenshotRecognitionState.Error(
                         message = hint,
                         lastImageUriString = uri.toString()
@@ -1208,19 +1217,27 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
             } catch (e: TimeoutCancellationException) {
-                Log.w("InvestViewModel", "Timeout ao analisar print de ordens", e)
+                Log.w("InvestViewModel", "Timeout ao analisar nota/print de ordens", e)
                 _orderScreenshotState.value = OrderScreenshotRecognitionState.Error(
-                    message = "Tempo esgotado ao analisar o print (60s). Verifique sua conexão e tente novamente.",
+                    message = if (isPdf) {
+                        "Tempo esgotado ao ler a Nota de Corretagem PDF (120s). Para arquivos muito longos, tente novamente ou divida por período."
+                    } else {
+                        "Tempo esgotado ao analisar o print (60s). Verifique sua conexão e tente novamente."
+                    },
                     lastImageUriString = uri.toString()
                 )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.e("InvestViewModel", "Falha ao reconhecer print de ordens", e)
+                Log.e("InvestViewModel", "Falha ao reconhecer nota/print de ordens", e)
                 _orderScreenshotState.value = OrderScreenshotRecognitionState.Error(
                     message = formatFirebaseAiError(
                         e,
-                        "Não foi possível ler as ordens do print selecionado. Tente novamente com uma imagem nítida."
+                        if (isPdf) {
+                            "Não foi possível interpretar a Nota de Corretagem PDF selecionada. Verifique se o PDF não está protegido por senha."
+                        } else {
+                            "Não foi possível ler as ordens do arquivo selecionado. Tente novamente com um PDF de Nota de Corretagem ou print nítido (PNG/JPG)."
+                        }
                     ),
                     lastImageUriString = uri.toString()
                 )
@@ -1247,9 +1264,9 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.e("InvestViewModel", "Erro ao lançar ordens do print", e)
+                Log.e("InvestViewModel", "Erro ao lançar ordens da nota/print", e)
                 _statusBannerMessage.value =
-                    "Erro ao lançar ordens do print: ${e.localizedMessage ?: "falha de gravação"}"
+                    "Erro ao lançar ordens da nota/print: ${e.localizedMessage ?: "falha de gravação"}"
             }
         }
     }

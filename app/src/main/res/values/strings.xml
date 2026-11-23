@@ -25,4 +25,12 @@
     <string name="cd_open_alerts_center">Abrir central de alertas e metas</string>
     <string name="cd_delete_swing_alert">Remover alerta de variação brusca</string>
     <string name="cd_delete_investment_goal">Remover meta de investimento</string>
+    <string name="firestore_audit_title">Auditoria Executiva Gemini (Firestore)</string>
+    <string name="firestore_audit_sync_assets_cta">Sincronizar Ativos da Carteira no Firestore</string>
+    <string name="firestore_audit_run_cta">Auditar Ativo do Firestore (Gemini)</string>
+    <string name="cd_firestore_audit_icon">Auditoria Executiva Gemini</string>
+    <string name="brokerage_note_read_cta">Ler Nota (PDF) ou Print (IA)</string>
+    <string name="brokerage_note_review_title">Revisar Nota de Corretagem (PDF)</string>
+    <string name="brokerage_note_error_title">Não foi possível ler a nota ou print</string>
+    <string name="brokerage_note_pick_another_cta">Outro Arquivo</string>
 </resources>

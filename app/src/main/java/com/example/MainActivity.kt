@@ -281,7 +281,11 @@ fun InvestAuthGate(authOverride: FirebaseAuth? = null) {
                 }
             )
             val cloudReportsUiState by cloudSyncViewModel.cloudReports.collectAsStateWithLifecycle()
+            val cloudAssetsUiState by cloudSyncViewModel.cloudAssets.collectAsStateWithLifecycle()
+            val assetAuditsUiState by cloudSyncViewModel.assetAudits.collectAsStateWithLifecycle()
+            val activeAuditRunState by cloudSyncViewModel.activeAuditRunState.collectAsStateWithLifecycle()
             val isCloudSyncing by cloudSyncViewModel.isSyncing.collectAsStateWithLifecycle()
+            val isSyncingAssets by cloudSyncViewModel.isSyncingAssets.collectAsStateWithLifecycle()
             val cloudSyncMessage by cloudSyncViewModel.syncMessage.collectAsStateWithLifecycle()
 
             InvestAppRoot(
@@ -291,7 +295,15 @@ fun InvestAuthGate(authOverride: FirebaseAuth? = null) {
                 isCloudSyncing = isCloudSyncing,
                 cloudSyncMessage = cloudSyncMessage,
                 onClearCloudSyncMessage = cloudSyncViewModel::clearSyncMessage,
-                onSyncConsolidatedReport = cloudSyncViewModel::syncConsolidatedReportToCloud
+                onSyncConsolidatedReport = cloudSyncViewModel::syncConsolidatedReportToCloud,
+                cloudAssetsUiState = cloudAssetsUiState,
+                assetAuditsUiState = assetAuditsUiState,
+                activeAuditRunState = activeAuditRunState,
+                isSyncingAssets = isSyncingAssets,
+                onSyncAssetsToFirestore = cloudSyncViewModel::syncAssetsToFirestore,
+                onRunGeminiAssetAudit = cloudSyncViewModel::runGeminiAssetAudit,
+                onSelectSavedAudit = cloudSyncViewModel::selectSavedAudit,
+                onDismissAuditState = cloudSyncViewModel::clearActiveAuditRunState
             )
         }
     }

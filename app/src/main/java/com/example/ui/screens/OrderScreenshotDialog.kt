@@ -3,6 +3,8 @@ package com.example.ui.screens
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -20,9 +22,10 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material.icons.filled.ImageSearch
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -56,12 +59,14 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.domain.model.B3BrokerageSpecMapper
 import com.example.domain.model.OperationType
 import com.example.domain.model.OrderScreenshotRecognitionState
 import com.example.domain.model.PortfolioType
 import com.example.domain.model.RecognizedOrderDraft
 import com.example.ui.components.formatBrl
 import com.example.ui.theme.AmberGold
+import com.example.ui.theme.CardElevated
 import com.example.ui.theme.CoralContainer
 import com.example.ui.theme.CoralRed
 import com.example.ui.theme.DeepNavySurface
@@ -70,9 +75,9 @@ import com.example.ui.theme.EmeraldContainer
 import com.example.ui.theme.EmeraldOnPrimary
 import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.MonoValueStyle
-import com.example.ui.theme.CardElevated
 import com.example.ui.theme.SubtleBorder
 import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.VioletAccent
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -83,6 +88,7 @@ private data class EditableOrderUiRow(
     val operationType: OperationType,
     val quantityText: String,
     val unitPriceText: String,
+    val totalValueText: String,
     val dateIso: String,
     val timeLabel: String,
     val statusLabel: String,
@@ -91,23 +97,44 @@ private data class EditableOrderUiRow(
     val isExecuted: Boolean,
     val isIncomplete: Boolean,
     val selected: Boolean,
-    val notes: String
+    val notes: String,
+    val specificationTitle: String = "",
+    val noteNumber: String = "",
+    val marketSegment: String = "VISTA",
+    val isDayTrade: Boolean = false,
+    val feesBrl: Double = 0.0
 ) {
+    val isFuturesContract: Boolean
+        get() = marketSegment.equals("BMF_FUTUROS", ignoreCase = true) ||
+            B3BrokerageSpecMapper.isFuturesTicker(ticker)
+
     fun parseQuantity(): Double = parseDecimalPtBr(quantityText)
     fun parseUnitPrice(): Double = parseDecimalPtBr(unitPriceText)
-    fun computedTotal(): Double = (parseQuantity() * parseUnitPrice()).coerceAtLeast(0.0)
-    fun isValidForLaunch(): Boolean = ticker.trim().length >= 4 && parseQuantity() > 0.0 && parseUnitPrice() > 0.0
+    fun parseTotalValue(): Double = parseDecimalPtBr(totalValueText)
+
+    fun computedTotal(): Double = if (isFuturesContract) {
+        parseTotalValue().coerceAtLeast(0.0)
+    } else {
+        (parseQuantity() * parseUnitPrice()).coerceAtLeast(0.0)
+    }
+
+    fun isValidForLaunch(): Boolean = if (isFuturesContract) {
+        ticker.trim().length >= 4 && parseQuantity() > 0.0 && (parseUnitPrice() > 0.0 || parseTotalValue() > 0.0)
+    } else {
+        ticker.trim().length >= 4 && parseQuantity() > 0.0 && parseUnitPrice() > 0.0
+    }
 
     fun toDraft(): RecognizedOrderDraft {
         val qty = parseQuantity()
         val price = parseUnitPrice()
+        val total = computedTotal()
         return RecognizedOrderDraft(
             id = id,
             ticker = ticker.trim().uppercase(),
             operationType = operationType,
             quantity = qty,
             unitPrice = price,
-            totalValue = qty * price,
+            totalValue = total,
             dateIso = dateIso.trim(),
             timeLabel = timeLabel,
             statusLabel = statusLabel,
@@ -116,7 +143,12 @@ private data class EditableOrderUiRow(
             isExecuted = isExecuted,
             isIncomplete = !isValidForLaunch(),
             selected = selected,
-            notes = notes
+            notes = notes,
+            specificationTitle = specificationTitle,
+            noteNumber = noteNumber,
+            marketSegment = marketSegment,
+            isDayTrade = isDayTrade,
+            feesBrl = feesBrl
         )
     }
 }
@@ -215,7 +247,7 @@ private fun AnalyzingScreenshotContent(statusLabel: String) {
             fontWeight = FontWeight.SemiBold
         )
         Text(
-            text = "Identificando corretora, ativos, compra/venda, quantidade executada, preço médio e data...",
+            text = "Identificando corretora, pregões, ativos B3/BM&F, compra/venda, parciais consolidadas, taxas e datas...",
             style = MaterialTheme.typography.bodySmall,
             color = TextSecondary
         )
@@ -237,13 +269,13 @@ private fun ErrorScreenshotContent(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
                 imageVector = Icons.Default.ErrorOutline,
-                contentDescription = "Erro na leitura do print",
+                contentDescription = "Erro na leitura da nota ou print",
                 tint = CoralRed,
                 modifier = Modifier.size(24.dp)
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                text = "Não foi possível reconhecer o print",
+                text = "Não foi possível ler a nota ou print",
                 style = MaterialTheme.typography.titleMedium,
                 color = CoralRed
             )
@@ -284,14 +316,15 @@ private fun ErrorScreenshotContent(
                     .heightIn(min = 48.dp)
                     .testTag("retry_order_screenshot_button")
             ) {
-                Icon(Icons.Default.ImageSearch, contentDescription = null, modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("Outro Print")
+                Text("Outro Arquivo")
             }
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ReviewScreenshotOrdersContent(
     state: OrderScreenshotRecognitionState.Review,
@@ -311,6 +344,7 @@ private fun ReviewScreenshotOrdersContent(
                         operationType = draft.operationType,
                         quantityText = formatEditableNumber(draft.quantity),
                         unitPriceText = formatEditableNumber(draft.unitPrice),
+                        totalValueText = formatEditableNumber(draft.computedTotalValue),
                         dateIso = draft.dateIso,
                         timeLabel = draft.timeLabel,
                         statusLabel = draft.statusLabel,
@@ -319,7 +353,12 @@ private fun ReviewScreenshotOrdersContent(
                         isExecuted = draft.isExecuted,
                         isIncomplete = draft.isIncomplete,
                         selected = draft.selected,
-                        notes = draft.notes
+                        notes = draft.notes,
+                        specificationTitle = draft.specificationTitle,
+                        noteNumber = draft.noteNumber,
+                        marketSegment = draft.marketSegment,
+                        isDayTrade = draft.isDayTrade,
+                        feesBrl = draft.feesBrl
                     )
                 }
             )
@@ -332,7 +371,15 @@ private fun ReviewScreenshotOrdersContent(
         .map { it.toDraft() }
     val selectedInvalidCount = editableRows.count { it.selected && !it.isValidForLaunch() }
     val totalSelectedBrl = selectedValidDrafts.sumOf { it.computedTotalValue }
+    val allSelected = editableRows.isNotEmpty() && editableRows.all { it.selected }
+    val hasFutures = editableRows.any { it.isFuturesContract }
     val todayBr = remember { SimpleDateFormat("dd/MM/yyyy", Locale("pt", "BR")).format(Date()) }
+
+    val dialogTitle = if (result.isBrokerageNote) {
+        "Revisar Nota de Corretagem (PDF)"
+    } else {
+        "Revisar Ordens do Print"
+    }
 
     Column(
         modifier = Modifier
@@ -349,7 +396,7 @@ private fun ReviewScreenshotOrdersContent(
                 modifier = Modifier.weight(1f)
             ) {
                 Icon(
-                    imageVector = Icons.Default.DocumentScanner,
+                    imageVector = if (result.isBrokerageNote) Icons.Default.Description else Icons.Default.DocumentScanner,
                     contentDescription = null,
                     tint = EmeraldPrimary,
                     modifier = Modifier.size(22.dp)
@@ -357,7 +404,7 @@ private fun ReviewScreenshotOrdersContent(
                 Spacer(Modifier.width(8.dp))
                 Column {
                     Text(
-                        text = "Revisar Ordens do Print",
+                        text = dialogTitle,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -378,7 +425,7 @@ private fun ReviewScreenshotOrdersContent(
                 onClick = onDismiss,
                 modifier = Modifier.testTag("close_screenshot_review_button")
             ) {
-                Icon(Icons.Default.Close, contentDescription = "Fechar revisão do print")
+                Icon(Icons.Default.Close, contentDescription = "Fechar revisão de ordens")
             }
         }
 
@@ -391,6 +438,16 @@ private fun ReviewScreenshotOrdersContent(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            if (result.isBrokerageNote) {
+                BrokerageNoteSummaryCard(
+                    documentKind = result.documentKind,
+                    notesCount = result.notesCount,
+                    operationsCount = editableRows.size,
+                    totalFeesBrl = result.totalFeesBrl,
+                    totalNetSettlementBrl = result.totalNetSettlementBrl
+                )
+            }
+
             if (result.warnings.isNotEmpty()) {
                 Surface(
                     shape = RoundedCornerShape(12.dp),
@@ -444,7 +501,11 @@ private fun ReviewScreenshotOrdersContent(
                             fontWeight = FontWeight.Medium
                         )
                         Text(
-                            text = "Recalcula quantidade e PM automaticamente na ${targetPortfolioType.label}",
+                            text = if (hasFutures) {
+                                "Atualiza ações/FIIs na ${targetPortfolioType.label}; contratos futuros BM&F ficam apenas no histórico."
+                            } else {
+                                "Recalcula quantidade e PM automaticamente na ${targetPortfolioType.label}"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = TextSecondary
                         )
@@ -457,6 +518,31 @@ private fun ReviewScreenshotOrdersContent(
                 }
             }
 
+            if (editableRows.size > 2) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "${editableRows.count { it.selected }} de ${editableRows.size} selecionada(s)",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = TextSecondary
+                    )
+                    TextButton(
+                        onClick = {
+                            val target = !allSelected
+                            for (i in editableRows.indices) {
+                                editableRows[i] = editableRows[i].copy(selected = target)
+                            }
+                        },
+                        modifier = Modifier.testTag("screenshot_toggle_all_button")
+                    ) {
+                        Text(if (allSelected) "Desmarcar todas" else "Marcar todas")
+                    }
+                }
+            }
+
             if (editableRows.isEmpty()) {
                 Surface(
                     shape = RoundedCornerShape(12.dp),
@@ -465,7 +551,7 @@ private fun ReviewScreenshotOrdersContent(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "Nenhuma ordem listada. Adicione uma ordem abaixo ou selecione outro print.",
+                        text = "Nenhuma ordem listada. Adicione uma ordem abaixo ou selecione outra nota/print.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary,
                         modifier = Modifier.padding(14.dp)
@@ -495,6 +581,7 @@ private fun ReviewScreenshotOrdersContent(
                                 operationType = OperationType.COMPRA,
                                 quantityText = "",
                                 unitPriceText = "",
+                                totalValueText = "",
                                 dateIso = todayBr,
                                 timeLabel = "",
                                 statusLabel = "Manual",
@@ -503,7 +590,7 @@ private fun ReviewScreenshotOrdersContent(
                                 isExecuted = true,
                                 isIncomplete = false,
                                 selected = true,
-                                notes = "Adicionada na revisão do print"
+                                notes = "Adicionada na revisão"
                             )
                         )
                     },
@@ -523,9 +610,9 @@ private fun ReviewScreenshotOrdersContent(
                         .heightIn(min = 48.dp)
                         .testTag("screenshot_pick_another_button")
                 ) {
-                    Icon(Icons.Default.ImageSearch, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("Trocar Print")
+                    Text(if (result.isBrokerageNote) "Outra Nota/Print" else "Trocar Print")
                 }
             }
         }
@@ -589,6 +676,79 @@ private fun ReviewScreenshotOrdersContent(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun BrokerageNoteSummaryCard(
+    documentKind: String,
+    notesCount: Int,
+    operationsCount: Int,
+    totalFeesBrl: Double,
+    totalNetSettlementBrl: Double?
+) {
+    val isBmf = documentKind.equals("NOTA_BMF", ignoreCase = true)
+    val badgeColor = if (isBmf) VioletAccent else ElectricCyan
+    val segmentLabel = if (isBmf) "BM&F • Derivativos Futuros" else "B3 RV • Ações / FIIs / FIAGROs"
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = badgeColor.copy(alpha = 0.10f),
+        border = BorderStroke(1.dp, badgeColor.copy(alpha = 0.45f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("brokerage_note_summary_card")
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = badgeColor.copy(alpha = 0.22f)
+                ) {
+                    Text(
+                        text = segmentLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = badgeColor,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+                if (notesCount > 0) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = EmeraldContainer.copy(alpha = 0.5f)
+                    ) {
+                        Text(
+                            text = "$notesCount nota(s)/pregão(ões)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = EmeraldPrimary,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+            }
+            Text(
+                text = buildString {
+                    append("$operationsCount operação(ões) consolidada(s)")
+                    if (totalFeesBrl > 0.0) {
+                        append(" • Taxas/Custos: ${formatBrl(totalFeesBrl)}")
+                    }
+                    if (totalNetSettlementBrl != null) {
+                        append(" • Líquido: ${formatBrl(totalNetSettlementBrl)}")
+                    }
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RecognizedOrderEditableCard(
     index: Int,
@@ -632,28 +792,74 @@ private fun RecognizedOrderEditableCard(
                         colors = CheckboxDefaults.colors(checkedColor = EmeraldPrimary),
                         modifier = Modifier.testTag("screenshot_order_checkbox_$index")
                     )
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = if (needsAttention) AmberGold.copy(alpha = 0.16f) else EmeraldContainer.copy(alpha = 0.5f)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Text(
-                            text = if (row.isIncomplete && !row.isValidForLaunch()) {
-                                "${row.statusLabel} • Incompleta"
-                            } else {
-                                row.statusLabel
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (needsAttention) AmberGold else EmeraldPrimary,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        )
-                    }
-                    if (row.timeLabel.isNotBlank()) {
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            text = row.timeLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextSecondary
-                        )
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (needsAttention) AmberGold.copy(alpha = 0.16f) else EmeraldContainer.copy(alpha = 0.5f)
+                        ) {
+                            Text(
+                                text = if (row.isIncomplete && !row.isValidForLaunch()) {
+                                    "${row.statusLabel} • Incompleta"
+                                } else {
+                                    row.statusLabel
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (needsAttention) AmberGold else EmeraldPrimary,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                        if (row.noteNumber.isNotBlank()) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = ElectricCyan.copy(alpha = 0.14f)
+                            ) {
+                                Text(
+                                    text = "Nota #${row.noteNumber}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ElectricCyan,
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                        if (row.isFuturesContract) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = VioletAccent.copy(alpha = 0.18f)
+                            ) {
+                                Text(
+                                    text = "BM&F",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = VioletAccent,
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                        if (row.isDayTrade) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = AmberGold.copy(alpha = 0.18f)
+                            ) {
+                                Text(
+                                    text = "DAY TRADE",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = AmberGold,
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                        if (row.timeLabel.isNotBlank()) {
+                            Text(
+                                text = row.timeLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary,
+                                modifier = Modifier.padding(top = 3.dp)
+                            )
+                        }
                     }
                 }
                 IconButton(
@@ -667,6 +873,14 @@ private fun RecognizedOrderEditableCard(
                         modifier = Modifier.size(18.dp)
                     )
                 }
+            }
+
+            if (row.specificationTitle.isNotBlank()) {
+                Text(
+                    text = "Especificação SINACOR: ${row.specificationTitle}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ElectricCyan
+                )
             }
 
             Row(
@@ -717,7 +931,7 @@ private fun RecognizedOrderEditableCard(
                 OutlinedTextField(
                     value = row.quantityText,
                     onValueChange = { onUpdate(row.copy(quantityText = it)) },
-                    label = { Text("Qtd Exec.") },
+                    label = { Text(if (row.isFuturesContract) "Contratos" else "Qtd Exec.") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier
@@ -727,7 +941,7 @@ private fun RecognizedOrderEditableCard(
                 OutlinedTextField(
                     value = row.unitPriceText,
                     onValueChange = { onUpdate(row.copy(unitPriceText = it)) },
-                    label = { Text("Preço Médio (R$)") },
+                    label = { Text(if (row.isFuturesContract) "Pontos / Ajuste" else "Preço Médio (R$)") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier
@@ -751,16 +965,29 @@ private fun RecognizedOrderEditableCard(
                         .weight(1f)
                         .testTag("screenshot_order_date_$index")
                 )
-                Column(
-                    horizontalAlignment = Alignment.End,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Total da Ordem", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
-                    Text(
-                        text = formatBrl(row.computedTotal()),
-                        style = MonoValueStyle,
-                        color = sideColor
+                if (row.isFuturesContract) {
+                    OutlinedTextField(
+                        value = row.totalValueText,
+                        onValueChange = { onUpdate(row.copy(totalValueText = it)) },
+                        label = { Text("Ajuste Fin. (R$)") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("screenshot_order_futures_total_$index")
                     )
+                } else {
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Total da Ordem", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                        Text(
+                            text = formatBrl(row.computedTotal()),
+                            style = MonoValueStyle,
+                            color = sideColor
+                        )
+                    }
                 }
             }
 

@@ -1295,10 +1295,181 @@ class InvestAiCoreTests {
         assertTrue(assetQtySnap.isReached)
         assertEquals(100.0, assetQtySnap.currentValue, 0.01)
     }
+
+    @Test
+    fun `cloud asset mapping and Gemini executive audit prompt preserve Firestore indicators, cyclical flag, and prior insights`() {
+        assertEquals("PETR4", com.example.domain.model.CloudAsset.normalizeAssetDocId(" petr4 "))
+        assertEquals("HGLG11", com.example.domain.model.CloudAsset.normalizeAssetDocId("HGLG11"))
+
+        val pos = PortfolioItemView(
+            id = 5L,
+            portfolioType = PortfolioType.REAL,
+            ticker = "WEGE3",
+            name = "WEG ON",
+            assetClass = AssetClass.ACOES_BR,
+            quantity = 40.0,
+            averagePrice = 42.0,
+            currentPrice = 52.90,
+            sector = "Bens Industriais",
+            dataComDay = 22,
+            dataSourceLabel = "Carteira Real B3",
+            isDemo = false,
+            hasMarketPrice = true,
+            isCyclical = false
+        )
+        val market = MarketCatalogRepository.catalogAssets.first { it.ticker == "WEGE3" }
+        val cloudAsset = com.example.domain.model.CloudAsset.fromLocalData(
+            position = pos,
+            marketAsset = market,
+            userId = "uid_test"
+        )
+
+        assertEquals("WEGE3", cloudAsset.id)
+        assertEquals("WEGE3", cloudAsset.ticker)
+        assertFalse(cloudAsset.cyclical)
+        assertEquals(null, cloudAsset.resolvedDataComGroup())
+        assertEquals(40.0 * 52.90, cloudAsset.totalPositionBrl(), 0.01)
+
+        val priorInsight = com.example.data.repository.CloudAgentInsight(
+            id = "ins_1",
+            userId = "uid_test",
+            agentRole = "ANALISTA",
+            ticker = "WEGE3",
+            conclusion = "Manter",
+            confidence = 82L,
+            thesis = "ROE elevado e expansão internacional consistente."
+        )
+        val prompt = com.example.data.repository.GeminiFirestoreAssetAuditService.buildExecutiveAuditPrompt(
+            asset = cloudAsset,
+            relatedInsights = listOf(priorInsight)
+        )
+        assertTrue(prompt.contains("Ticker: WEGE3"))
+        assertTrue(prompt.contains("Ativo não cíclico (sem enquadramento em grupos G1–G4)"))
+        assertTrue(prompt.contains("PARECERES ANTERIORES NO FIRESTORE"))
+        assertTrue(prompt.contains("ROE elevado e expansão internacional consistente."))
+    }
+
+    @Test
+    fun `B3BrokerageSpecMapper resolves real Genial SINACOR B3 RV and BMF specifications to tickers`() {
+        val mapper = com.example.domain.model.B3BrokerageSpecMapper
+        val expectedMappings = mapOf(
+            "ALLOS ON ED NM" to "ALOS3",
+            "FII IRIM CI" to "IRIM11",
+            "FII HECTARE CI" to "HCTR11",
+            "FII EXES CI" to "EXES11",
+            "FII SMRE CI ER" to "SMRE11",
+            "FII DEVANT CI ER" to "DEVA11",
+            "FII BTG AGRO CI" to "BTAG11",
+            "FIAGRO BTAG CI" to "BTAG11",
+            "VULCABRAS ON NM" to "VULC3",
+            "FII MAUA RE CI" to "MCRE11",
+            "WIZ CO ON NM" to "WIZC3",
+            "MINERVA ON NM" to "BEEF3",
+            "KLABIN S/A ON N2" to "KLBN3",
+            "DEXXOS PAR ON N1" to "DEXP3",
+            "FII BTHF CI" to "BTHF11",
+            "FII RIZA AKN CI" to "RZAK11",
+            "B3 ON NM" to "B3SA3",
+            "SCHULZ PN" to "SHUL4",
+            "MITRE REALTY ON NM" to "MTRE3",
+            "CURY S/A ON NM" to "CURY3",
+            "CAIXA SEGURI ON ED NM" to "CXSE3",
+            "TENDA ON NM" to "TEND3",
+            "CARTESIA FII CI" to "CACR11",
+            "FII REC REND CI" to "RECR11",
+            "FII EQI RECE CI" to "EQIR11",
+            "LAVVI ON NM" to "LAVV3",
+            "ISA ENERGIA PN EJ N1" to "ISAE4",
+            "CEA MODAS ON NM" to "CEAB3",
+            "COPEL ON NM" to "CPLE3",
+            "FIAGRO ECO CI" to "EGAF11",
+            "FII RB YIELD CI" to "RBRI11",
+            "WIN Z26" to "WINZ26",
+            "WDO F27" to "WDOF27"
+        )
+
+        expectedMappings.forEach { (spec, expectedTicker) ->
+            assertEquals("Falha ao mapear '$spec'", expectedTicker, mapper.resolveTicker("", spec))
+        }
+        assertTrue(mapper.isFuturesTicker("WINZ26"))
+        assertTrue(mapper.isFuturesTicker("WDOF27"))
+        assertFalse(mapper.isFuturesTicker("ALOS3"))
+        assertFalse(mapper.isFuturesTicker("DEVA11"))
+    }
+
+    @Test
+    fun `OrderScreenshotJsonParser consolidates B3 partial fills and preserves BMF futures BRL adjustments`() {
+        val partial1 = com.example.domain.model.RecognizedOrderDraft(
+            ticker = "ALOS3",
+            operationType = com.example.domain.model.OperationType.COMPRA,
+            quantity = 2.0,
+            unitPrice = 26.90,
+            totalValue = 53.80,
+            dateIso = "12/11/2026",
+            specificationTitle = "ALLOS ON NM",
+            noteNumber = "1656",
+            marketSegment = "FRACIONARIO",
+            isDayTrade = false
+        )
+        val partial2 = com.example.domain.model.RecognizedOrderDraft(
+            ticker = "ALOS3",
+            operationType = com.example.domain.model.OperationType.COMPRA,
+            quantity = 3.0,
+            unitPrice = 27.00,
+            totalValue = 81.00,
+            dateIso = "12/11/2026",
+            specificationTitle = "ALLOS ON NM",
+            noteNumber = "1656",
+            marketSegment = "FRACIONARIO",
+            isDayTrade = false
+        )
+        val devaDt = com.example.domain.model.RecognizedOrderDraft(
+            ticker = "DEVA11",
+            operationType = com.example.domain.model.OperationType.VENDA,
+            quantity = 10.0,
+            unitPrice = 24.50,
+            totalValue = 245.00,
+            dateIso = "16/11/2026",
+            specificationTitle = "FII DEVANT CI ER",
+            noteNumber = "2104",
+            marketSegment = "VISTA",
+            isDayTrade = true
+        )
+
+        val consolidated = com.example.domain.model.OrderScreenshotJsonParser.consolidatePartialFills(
+            listOf(partial1, partial2, devaDt)
+        )
+        assertEquals(2, consolidated.size)
+
+        val alos = consolidated.first { it.ticker == "ALOS3" }
+        assertEquals(5.0, alos.quantity, 0.001)
+        assertEquals(26.96, alos.unitPrice, 0.001) // (2*26.90 + 3*27.00) / 5
+        assertEquals(134.80, alos.computedTotalValue, 0.01)
+        assertTrue(alos.buildExternalRefId().startsWith("NOTA:1656:ALOS3:COMPRA:"))
+        assertTrue(alos.notes.contains("Consolidado de 2 execuções parciais"))
+
+        val deva = consolidated.first { it.ticker == "DEVA11" }
+        assertTrue(deva.isDayTrade)
+        assertTrue(deva.buildExternalRefId().contains(":DT:"))
+
+        // BM&F Futuros: unitPrice em pontos (167.625) NÃO pode ser multiplicado por contratos no totalValue em reais (49,60)
+        val win = com.example.domain.model.RecognizedOrderDraft(
+            ticker = "WINZ26",
+            operationType = com.example.domain.model.OperationType.VENDA,
+            quantity = 2.0,
+            unitPrice = 167625.0,
+            totalValue = 49.60,
+            dateIso = "03/11/2026",
+            specificationTitle = "WIN Z26 16/12/2026",
+            noteNumber = "534005",
+            marketSegment = "BMF_FUTUROS",
+            isDayTrade = true
+        )
+        assertTrue(win.isFuturesContract)
+        assertEquals(167625.0, win.unitPrice, 0.01)
+        assertEquals(49.60, win.computedTotalValue, 0.01)
+        assertTrue(win.isReadyToLaunch)
+        assertTrue(win.buildExternalRefId().startsWith("NOTA:534005:WINZ26:VENDA:03/11/2026:DT:"))
+    }
 }
-
-
-
-
-
 
