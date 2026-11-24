@@ -1,14 +1,10 @@
 package com.example.ui.screens
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material3.Surface
-import androidx.compose.ui.draw.clip
-import com.example.ui.components.GroupBadge
-import com.example.ui.theme.EmeraldContainer
+import com.example.domain.model.AssetDetailCalculator
+import com.example.domain.model.AssetDetailTab
+import com.example.ui.components.PremiumPortfolioAssetCard
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -123,7 +119,8 @@ fun PortfolioScreen(
     onDismissScreenshotReview: () -> Unit = {},
     onUpdateOperation: (Long, String, OperationType, Double, Double, String, String) -> Unit = { _, _, _, _, _, _, _ -> },
     onDeleteOperation: (Long) -> Unit = {},
-    onRestoreAuditEntry: (Long) -> Unit = {}
+    onRestoreAuditEntry: (Long) -> Unit = {},
+    onOpenAssetDetail: (String, AssetDetailTab) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     var showAddPositionDialog by remember { mutableStateOf(false) }
@@ -468,8 +465,23 @@ fun PortfolioScreen(
                 }
             } else {
                 items(activePositions, key = { it.id }) { pos ->
-                    PositionCard(
+                    val catalogMatch = state.marketAssets.firstOrNull {
+                        it.ticker.equals(pos.ticker, ignoreCase = true)
+                    }
+                    val liveMatch = state.liveQuotesByTicker[pos.ticker.trim().uppercase(Locale.ROOT)]
+                    val indicators = remember(pos, catalogMatch, liveMatch, state.dividendEvents) {
+                        AssetDetailCalculator.computeCardIndicators(
+                            pos = pos,
+                            catalogAsset = catalogMatch,
+                            liveQuote = liveMatch,
+                            dividendEvents = state.dividendEvents
+                        )
+                    }
+                    PremiumPortfolioAssetCard(
                         pos = pos,
+                        indicators = indicators,
+                        onClickTicker = { onOpenAssetDetail(pos.ticker, AssetDetailTab.ORDERS) },
+                        onOpenMetricDetail = { tab -> onOpenAssetDetail(pos.ticker, tab) },
                         onOpenCadastroAndEdit = { selectedPositionForEdit = pos },
                         onDelete = { pendingDeletePosition = pos }
                     )
@@ -707,104 +719,5 @@ fun PortfolioScreen(
                 onConfirmScreenshotOrders(selectedType, orders, applyToPositions)
             }
         )
-    }
-}
-
-@Composable
-private fun PositionCard(
-    pos: PortfolioItemView,
-    onOpenCadastroAndEdit: () -> Unit,
-    onDelete: () -> Unit
-) {
-    FintechCard {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Top
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = EmeraldContainer.copy(alpha = 0.45f),
-                        modifier = Modifier
-                            .heightIn(min = 48.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .testTag("ticker_edit_button_${pos.ticker}")
-                            .clickable { onOpenCadastroAndEdit() }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                pos.ticker + if (pos.isDemo) " [DEMO]" else "",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = EmeraldPrimary
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Icon(
-                                Icons.Default.Edit,
-                                contentDescription = "Acessar cadastro e editar ${pos.ticker}",
-                                tint = EmeraldPrimary,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            Text(
-                                "Cadastro / Editar",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = EmeraldPrimary
-                            )
-                        }
-                    }
-                    if (pos.isCyclical) {
-                        GroupBadge(pos.dataComGroup)
-                    } else {
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = ElectricCyan.copy(alpha = 0.12f),
-                            border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.4f)),
-                            modifier = Modifier.testTag("position_non_cyclical_badge_${pos.ticker}")
-                        ) {
-                            Text(
-                                text = "Não cíclico",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = ElectricCyan,
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-                Text("${pos.name} • ${pos.assetClass.shortLabel}", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
-                Text("Fonte: ${pos.dataSourceLabel}", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
-            }
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Default.Delete, contentDescription = "Remover ${pos.ticker}", tint = TextSecondary)
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Column {
-                Text("Qtd / PM", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
-                Text("${"%.2f".format(pos.quantity)} x ${formatBrl(pos.averagePrice)}", style = MonoValueStyle)
-            }
-            Column(horizontalAlignment = Alignment.End) {
-                Text("Total / Var.", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
-                Text(formatBrl(pos.totalCurrentBrl), style = MonoValueStyle)
-                if (pos.hasMarketPrice) {
-                    Text(
-                        formatPct(pos.profitLossPercent),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (pos.profitLossPercent >= 0) EmeraldPrimary else CoralRed
-                    )
-                } else {
-                    Text("Cotação não informada", style = MaterialTheme.typography.labelSmall, color = AmberGold)
-                }
-            }
-        }
     }
 }

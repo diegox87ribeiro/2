@@ -1599,6 +1599,158 @@ class ConsolidatedReportsRobolectricTest {
         composeRule.onNodeWithTag("edit_operation_ticker_input").assertIsDisplayed()
         composeRule.onNodeWithTag("edit_operation_save_button").assertIsDisplayed()
     }
+
+    @Test
+    fun `PortfolioScreen redesigned Dark Premium asset card routes ticker and all 6 financial indicators independently`() {
+        val egaf = com.example.domain.model.PortfolioItemView(
+            id = 88L,
+            portfolioType = com.example.domain.model.PortfolioType.REAL,
+            ticker = "EGAF11",
+            name = "Ecoagro I Fiagro",
+            assetClass = com.example.domain.model.AssetClass.FIAGRO,
+            quantity = 25.0,
+            averagePrice = 80.38,
+            currentPrice = 70.99,
+            sector = "Fiagro",
+            dataComDay = 5,
+            dataSourceLabel = "Manual",
+            isDemo = false,
+            hasMarketPrice = true,
+            isCyclical = true
+        )
+        val divEvent = com.example.data.local.DividendEventEntity(
+            id = 12L,
+            assetTicker = "EGAF11",
+            eventType = com.example.domain.model.DividendEventType.DIVIDENDO.name,
+            status = com.example.domain.model.DividendStatus.RECEIVED.name,
+            exDate = "05/11/2026",
+            paymentDate = "15/11/2026",
+            unitAmount = 0.82,
+            quantityReference = 25.0,
+            totalAmount = 20.50,
+            source = "Manual"
+        )
+        val state = com.example.ui.viewmodel.InvestDashboardState(
+            realPositions = listOf(egaf),
+            dividendEvents = listOf(divEvent),
+            realHhi = com.example.domain.model.HhiRiskReport.calculate(listOf(egaf), 0.0)
+        )
+
+        val openedTabs = mutableListOf<Pair<String, com.example.domain.model.AssetDetailTab>>()
+
+        composeRule.setContent {
+            InvestAiTheme {
+                com.example.ui.screens.PortfolioScreen(
+                    state = state,
+                    selectedType = com.example.domain.model.PortfolioType.REAL,
+                    importFeedback = null,
+                    pendingImportPreview = null,
+                    onSelectType = {},
+                    onImportUri = {},
+                    onConfirmPendingImport = {},
+                    onDismissPendingImport = {},
+                    onDismissImportFeedback = {},
+                    onBuildTemplateCsv = { "" },
+                    onBuildPortfolioCsv = { "" },
+                    onNotify = {},
+                    onLoadDemoReal = {},
+                    onClearPortfolio = {},
+                    onAddManualPosition = { _, _, _, _, _, _, _, _, _, _ -> },
+                    onRecordOperation = { _, _, _, _, _, _ -> },
+                    onDeletePosition = {},
+                    onUpdateCash = { _, _ -> },
+                    onOpenAssetDetail = { tkr, tab -> openedTabs.add(tkr to tab) }
+                )
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("portfolio_lazy_column")
+            .performScrollToNode(hasTestTag("premium_asset_card_EGAF11"))
+        composeRule.onNodeWithTag("position_group_badge_EGAF11").assertIsDisplayed()
+
+        composeRule.onNodeWithTag("asset_card_ticker_EGAF11").performClick()
+        composeRule.onNodeWithTag("asset_metric_price_EGAF11").performClick()
+        composeRule.onNodeWithTag("asset_metric_dividends_EGAF11").performClick()
+        composeRule.onNodeWithTag("asset_metric_div_date_EGAF11").performClick()
+        composeRule.onNodeWithTag("asset_metric_quantity_EGAF11").performClick()
+        composeRule.onNodeWithTag("asset_metric_avg_price_EGAF11").performClick()
+        composeRule.onNodeWithTag("asset_metric_current_value_EGAF11").performClick()
+
+        org.junit.Assert.assertEquals(
+            listOf(
+                "EGAF11" to com.example.domain.model.AssetDetailTab.ORDERS,
+                "EGAF11" to com.example.domain.model.AssetDetailTab.QUOTES,
+                "EGAF11" to com.example.domain.model.AssetDetailTab.DIVIDENDS,
+                "EGAF11" to com.example.domain.model.AssetDetailTab.DIVIDEND_CALENDAR,
+                "EGAF11" to com.example.domain.model.AssetDetailTab.POSITION_MOVEMENTS,
+                "EGAF11" to com.example.domain.model.AssetDetailTab.AVERAGE_PRICE,
+                "EGAF11" to com.example.domain.model.AssetDetailTab.EQUITY_EVOLUTION
+            ),
+            openedTabs
+        )
+    }
+
+    @Test
+    fun `AssetDetailScreen switches across all 7 tabs and separates Average Price from Current Price`() {
+        val egaf = com.example.domain.model.PortfolioItemView(
+            id = 88L,
+            portfolioType = com.example.domain.model.PortfolioType.REAL,
+            ticker = "EGAF11",
+            name = "Ecoagro I Fiagro",
+            assetClass = com.example.domain.model.AssetClass.FIAGRO,
+            quantity = 25.0,
+            averagePrice = 80.38,
+            currentPrice = 70.99,
+            sector = "Fiagro",
+            dataComDay = 5,
+            dataSourceLabel = "Manual",
+            isDemo = false,
+            hasMarketPrice = true,
+            isCyclical = true
+        )
+        val op = com.example.data.local.PortfolioOperationEntity(
+            id = 91L,
+            portfolioType = com.example.domain.model.PortfolioType.REAL.name,
+            ticker = "EGAF11",
+            operationType = com.example.domain.model.OperationType.COMPRA.name,
+            quantity = 25.0,
+            unitPrice = 80.38,
+            totalValue = 2009.50,
+            dateIso = "10/10/2026",
+            notes = "Taxa B3 R$ 0,50"
+        )
+        val state = com.example.ui.viewmodel.InvestDashboardState(
+            realPositions = listOf(egaf),
+            operations = listOf(op),
+            realHhi = com.example.domain.model.HhiRiskReport.calculate(listOf(egaf), 0.0)
+        )
+
+        composeRule.setContent {
+            InvestAiTheme {
+                com.example.ui.screens.AssetDetailScreen(
+                    ticker = "EGAF11",
+                    initialTab = com.example.domain.model.AssetDetailTab.ORDERS,
+                    state = state
+                )
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("asset_detail_screen_EGAF11").assertIsDisplayed()
+        composeRule.onNodeWithText("Histórico Completo de Ordens").assertIsDisplayed()
+
+        // Aba Preço Médio separa claramente PM e Cotação Atual
+        composeRule.onNodeWithTag("asset_detail_tab_AVERAGE_PRICE").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Composição Detalhada do Preço Médio").assertIsDisplayed()
+
+        // Aba Patrimônio
+        composeRule.onNodeWithTag("asset_detail_tab_EQUITY_EVOLUTION").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Evolução Patrimonial • EGAF11").assertIsDisplayed()
+    }
 }
+
 
 

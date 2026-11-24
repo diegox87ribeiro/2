@@ -46,12 +46,18 @@ object InvestRoutes {
     const val ROUTE_ALERTAS = "central_alertas"
     const val ROUTE_DATA_COM_GROUP = "data_com_grupo/{groupCode}"
     const val ROUTE_PORTFOLIO_CLASS = "carteira_classe/{assetClassName}"
+    const val ROUTE_ASSET_DETAIL = "ativo_detalhe/{ticker}/{tab}"
 
     fun dataComGroupRoute(group: com.example.domain.model.DataComGroup): String =
         "data_com_grupo/${group.code}"
 
     fun portfolioClassRoute(assetClass: com.example.domain.model.AssetClass): String =
         "carteira_classe/${assetClass.name}"
+
+    fun assetDetailRoute(
+        ticker: String,
+        tab: com.example.domain.model.AssetDetailTab = com.example.domain.model.AssetDetailTab.ORDERS
+    ): String = "ativo_detalhe/${ticker.trim().uppercase()}/${tab.name}"
 }
 
 enum class ModuleSection(val label: String) {

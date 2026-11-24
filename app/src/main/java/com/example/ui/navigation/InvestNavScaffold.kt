@@ -82,6 +82,7 @@ import androidx.navigation.navArgument
 import com.example.data.importexport.ImportParseResult
 import com.example.data.local.ImportHistoryEntity
 import com.example.domain.model.AssetClass
+import com.example.domain.model.AssetDetailTab
 import com.example.domain.model.ConsolidatedExecutiveReport
 import com.example.domain.model.DataComGroup
 import com.example.domain.model.FirestoreAssetAuditSummary
@@ -95,6 +96,7 @@ import com.example.ui.screens.AiAgentsScreen
 import com.example.ui.screens.AlertsAndGoalsScreen
 import com.example.ui.screens.AssetClassExplorerScreen
 import com.example.ui.screens.AssetComparatorScreen
+import com.example.ui.screens.AssetDetailScreen
 import com.example.ui.screens.CryptoScreen
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.DataComGroupDetailScreen
@@ -174,15 +176,17 @@ fun InvestAppRoot(
     val currentRoute = navBackStackEntry?.destination?.route ?: InvestRoutes.ROUTE_DASHBOARD
     val isDataComGroupRoute = currentRoute == InvestRoutes.ROUTE_DATA_COM_GROUP || currentRoute.startsWith("data_com_grupo/")
     val isPortfolioClassRoute = currentRoute == InvestRoutes.ROUTE_PORTFOLIO_CLASS || currentRoute.startsWith("carteira_classe/")
+    val isAssetDetailRoute = currentRoute == InvestRoutes.ROUTE_ASSET_DETAIL || currentRoute.startsWith("ativo_detalhe/")
     val activeDataComGroup = DataComGroup.entries.firstOrNull {
         it.code == navBackStackEntry?.arguments?.getString("groupCode")
     } ?: DataComGroup.G1
     val activePortfolioClass = AssetClass.entries.firstOrNull {
         it.name == navBackStackEntry?.arguments?.getString("assetClassName")
     } ?: AssetClass.ACOES_BR
+    val activeAssetDetailTicker = navBackStackEntry?.arguments?.getString("ticker").orEmpty().uppercase()
     val currentModule = when {
         isDataComGroupRoute -> ALL_INVEST_MODULES.first { it.route == InvestRoutes.ROUTE_CALENDARIO }
-        isPortfolioClassRoute -> ALL_INVEST_MODULES.first { it.route == InvestRoutes.ROUTE_CARTEIRA }
+        isPortfolioClassRoute || isAssetDetailRoute -> ALL_INVEST_MODULES.first { it.route == InvestRoutes.ROUTE_CARTEIRA }
         else -> ALL_INVEST_MODULES.firstOrNull { it.route == currentRoute } ?: ALL_INVEST_MODULES.first()
     }
 
@@ -220,6 +224,8 @@ fun InvestAppRoot(
                     activeDataComGroup = activeDataComGroup,
                     isPortfolioClassRoute = isPortfolioClassRoute,
                     activePortfolioClass = activePortfolioClass,
+                    isAssetDetailRoute = isAssetDetailRoute,
+                    activeAssetDetailTicker = activeAssetDetailTicker,
                     showMenuButton = false,
                     showBottomBar = false,
                     showRail = false,
@@ -277,6 +283,8 @@ fun InvestAppRoot(
                     activeDataComGroup = activeDataComGroup,
                     isPortfolioClassRoute = isPortfolioClassRoute,
                     activePortfolioClass = activePortfolioClass,
+                    isAssetDetailRoute = isAssetDetailRoute,
+                    activeAssetDetailTicker = activeAssetDetailTicker,
                     showMenuButton = true,
                     showBottomBar = !isMedium,
                     showRail = isMedium,
@@ -388,6 +396,8 @@ private fun MainScaffoldBody(
     activeDataComGroup: DataComGroup,
     isPortfolioClassRoute: Boolean,
     activePortfolioClass: AssetClass,
+    isAssetDetailRoute: Boolean,
+    activeAssetDetailTicker: String,
     showMenuButton: Boolean,
     showBottomBar: Boolean,
     showRail: Boolean,
@@ -415,7 +425,7 @@ private fun MainScaffoldBody(
     onSelectSavedAudit: (FirestoreAssetAuditSummary) -> Unit,
     onDismissAuditState: () -> Unit
 ) {
-    val isNestedDetailRoute = isDataComGroupRoute || isPortfolioClassRoute
+    val isNestedDetailRoute = isDataComGroupRoute || isPortfolioClassRoute || isAssetDetailRoute
     Scaffold(
         containerColor = ObsidianBg,
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -446,6 +456,10 @@ private fun MainScaffoldBody(
                             isPortfolioClassRoute -> {
                                 Text(activePortfolioClass.label, style = MaterialTheme.typography.titleMedium)
                                 Text("Carteira Real • Ativos da Classe", style = MaterialTheme.typography.labelSmall, color = EmeraldPrimary)
+                            }
+                            isAssetDetailRoute -> {
+                                Text("Ativo • ${activeAssetDetailTicker.ifBlank { "Detalhes" }}", style = MaterialTheme.typography.titleMedium)
+                                Text("Ordens, Cotações, Proventos & Preço Médio", style = MaterialTheme.typography.labelSmall, color = EmeraldPrimary)
                             }
                             else -> {
                                 Text(currentModule.title, style = MaterialTheme.typography.titleMedium)
@@ -611,7 +625,12 @@ private fun MainScaffoldBody(
                             onDismissScreenshotReview = viewModel::dismissOrderScreenshotReview,
                             onUpdateOperation = viewModel::updatePortfolioOperation,
                             onDeleteOperation = viewModel::deleteOperation,
-                            onRestoreAuditEntry = viewModel::restoreFromAuditLog
+                            onRestoreAuditEntry = viewModel::restoreFromAuditLog,
+                            onOpenAssetDetail = { ticker, tab ->
+                                navController.navigate(InvestRoutes.assetDetailRoute(ticker, tab)) {
+                                    launchSingleTop = true
+                                }
+                            }
                         )
                     }
                     composable(InvestRoutes.ROUTE_ACOES_BR) {
@@ -729,6 +748,30 @@ private fun MainScaffoldBody(
                             onDeletePosition = viewModel::deletePosition,
                             onOpenCarteira = { onNavigate(InvestRoutes.ROUTE_CARTEIRA) },
                             onBack = { navController.popBackStack() }
+                        )
+                    }
+                    composable(
+                        route = InvestRoutes.ROUTE_ASSET_DETAIL,
+                        arguments = listOf(
+                            navArgument("ticker") { type = NavType.StringType },
+                            navArgument("tab") { type = NavType.StringType }
+                        )
+                    ) { backStackEntry ->
+                        val tkr = backStackEntry.arguments?.getString("ticker").orEmpty()
+                        val tab = AssetDetailTab.fromCode(backStackEntry.arguments?.getString("tab"))
+                        AssetDetailScreen(
+                            ticker = tkr,
+                            initialTab = tab,
+                            state = state,
+                            selectedPortfolioType = selectedPortfolioType,
+                            onQueryLiveQuote = viewModel::queryLiveAssetQuote,
+                            onUpdatePosition = viewModel::updatePosition,
+                            onDeletePosition = viewModel::deletePosition,
+                            onRecordOperation = viewModel::recordOperation,
+                            onUpdateOperation = viewModel::updatePortfolioOperation,
+                            onDeleteOperation = viewModel::deleteOperation,
+                            onSaveDividendEvent = viewModel::saveDividendEvent,
+                            onSoftDeleteDividendEvent = viewModel::softDeleteDividendEvent
                         )
                     }
                     composable(InvestRoutes.ROUTE_FUNDAMENTALISTA) {

@@ -1742,6 +1742,92 @@ class InvestAiCoreTests {
         // PM ponderado após 100@30 + 100@40 = 35.00; venda parcial mantém PM = 35.00
         assertEquals(35.0, res.averagePrice, 0.001)
     }
+
+    @Test
+    fun `AssetDetailCalculator computes card indicators, average price steps, filtered orders, and equity evolution`() {
+        val egaf = PortfolioItemView(
+            id = 50L,
+            portfolioType = PortfolioType.REAL,
+            ticker = "EGAF11",
+            name = "Ecoagro I Fiagro",
+            assetClass = AssetClass.FIAGRO,
+            quantity = 25.0,
+            averagePrice = 80.38,
+            currentPrice = 70.99,
+            sector = "Fiagro",
+            dataComDay = 5,
+            dataSourceLabel = "Manual",
+            isDemo = false,
+            hasMarketPrice = true,
+            isCyclical = true
+        )
+        val divEvent = com.example.data.local.DividendEventEntity(
+            id = 10L,
+            assetTicker = "EGAF11",
+            eventType = com.example.domain.model.DividendEventType.DIVIDENDO.name,
+            status = com.example.domain.model.DividendStatus.RECEIVED.name,
+            exDate = "05/11/2026",
+            paymentDate = "15/11/2026",
+            unitAmount = 0.82,
+            quantityReference = 25.0,
+            totalAmount = 20.50,
+            source = "Manual"
+        )
+        val indicators = com.example.domain.model.AssetDetailCalculator.computeCardIndicators(
+            pos = egaf,
+            catalogAsset = null,
+            liveQuote = null,
+            dividendEvents = listOf(divEvent),
+            referenceYmd = Triple(2026, 11, 24)
+        )
+        assertEquals(0.82, indicators.dividendValueBrl ?: 0.0, 0.001)
+        assertEquals("Pago", indicators.dividendStatusLabel)
+        assertEquals("15/11/2026", indicators.dividendDateLabel)
+        assertTrue(indicators.dividendDateIsEffective)
+        assertTrue(indicators.sparklinePoints.size >= 4)
+
+        val ops = listOf(
+            com.example.data.local.PortfolioOperationEntity(
+                id = 1L, portfolioType = PortfolioType.REAL.name, ticker = "EGAF11",
+                operationType = OperationType.COMPRA.name, quantity = 10.0, unitPrice = 85.0,
+                totalValue = 850.0, dateIso = "10/09/2026", notes = "Compra 1"
+            ),
+            com.example.data.local.PortfolioOperationEntity(
+                id = 2L, portfolioType = PortfolioType.REAL.name, ticker = "EGAF11",
+                operationType = OperationType.COMPRA.name, quantity = 20.0, unitPrice = 78.0,
+                totalValue = 1560.0, dateIso = "05/11/2026", notes = "Compra 2"
+            ),
+            com.example.data.local.PortfolioOperationEntity(
+                id = 3L, portfolioType = PortfolioType.REAL.name, ticker = "EGAF11",
+                operationType = OperationType.VENDA.name, quantity = 5.0, unitPrice = 72.0,
+                totalValue = 360.0, dateIso = "18/11/2026", notes = "Venda parcial"
+            )
+        )
+        val steps = com.example.domain.model.AssetDetailCalculator.buildAveragePriceTimeline(ops)
+        assertEquals(3, steps.size)
+        assertEquals(85.0, steps[0].resultingAveragePrice, 0.001)
+        // (10*85 + 20*78) / 30 = 2410 / 30 = 80.3333
+        assertEquals(80.3333, steps[1].resultingAveragePrice, 0.01)
+        // Venda parcial preserva o PM e reduz quantidade para 25
+        assertEquals(25.0, steps[2].accumulatedQuantity, 0.001)
+        assertEquals(80.3333, steps[2].resultingAveragePrice, 0.01)
+
+        val buysLast30d = com.example.domain.model.AssetDetailCalculator.filterOperations(
+            operations = ops,
+            ticker = "EGAF11",
+            typeFilter = com.example.domain.model.OrderHistoryFilter.BUY,
+            periodFilter = com.example.domain.model.OrderPeriodFilter.LAST_30D,
+            referenceYmd = Triple(2026, 11, 24)
+        )
+        assertEquals(1, buysLast30d.size)
+        assertEquals(2L, buysLast30d.first().id)
+
+        val equity = com.example.domain.model.AssetDetailCalculator.buildEquityEvolution(egaf, steps, null)
+        assertEquals(4, equity.size)
+        assertEquals("Atual", equity.last().label)
+        assertEquals(25.0 * 70.99, equity.last().marketValueBrl, 0.01)
+    }
 }
+
 
 
