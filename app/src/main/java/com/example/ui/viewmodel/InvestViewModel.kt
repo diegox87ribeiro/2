@@ -12,6 +12,8 @@ import com.example.data.local.AlertNotificationHistoryEntity
 import com.example.data.local.AppPreferencesState
 import com.example.data.local.AssetSwingAlertEntity
 import com.example.data.local.CryptoVirtualPositionEntity
+import com.example.data.local.DividendEventEntity
+import com.example.data.local.FinancialAuditLogEntity
 import com.example.data.local.ImportHistoryEntity
 import com.example.data.local.InvestDatabase
 import com.example.data.local.InvestmentGoalEntity
@@ -39,7 +41,10 @@ import com.example.domain.model.AssetClass
 import com.example.domain.model.BenchmarkSeries
 import com.example.domain.model.DividendDateAlertEvaluator
 import com.example.domain.model.DividendDateEventType
+import com.example.domain.model.DividendDisplayEvent
+import com.example.domain.model.DividendEventType
 import com.example.domain.model.DividendMonitorCalculator
+import com.example.domain.model.DividendStatus
 import com.example.domain.model.HhiRiskReport
 import com.example.domain.model.InvestmentGoalType
 import com.example.domain.model.LiveMarketQuote
@@ -102,7 +107,18 @@ data class InvestDashboardState(
     val isLiveBatchRefreshing: Boolean = false,
     val profitConnectionState: ProfitChartConnectionState = ProfitChartConnectionState.Disconnected,
     val priceTargetAlerts: List<PriceTargetAlertEntity> = emptyList(),
-    val isCheckingPriceAlerts: Boolean = false
+    val isCheckingPriceAlerts: Boolean = false,
+    val dividendEvents: List<DividendEventEntity> = emptyList(),
+    val financialAuditLogs: List<FinancialAuditLogEntity> = emptyList(),
+    val isSyncingDividends: Boolean = false,
+    val dividendSyncStatusMessage: String = ""
+)
+
+private data class DividendManagementBundle(
+    val events: List<DividendEventEntity> = emptyList(),
+    val auditLogs: List<FinancialAuditLogEntity> = emptyList(),
+    val isSyncing: Boolean = false,
+    val syncStatusMessage: String = ""
 )
 
 data class SmartAlertsUiState(
@@ -131,6 +147,8 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
     private val _isLiveBatchRefreshing = MutableStateFlow(false)
     private val _isCheckingPriceAlerts = MutableStateFlow(false)
     private val _isCheckingSmartAlerts = MutableStateFlow(false)
+    private val _isSyncingDividends = MutableStateFlow(false)
+    private val _dividendSyncStatusMessage = MutableStateFlow("")
     private val _profitConnectionState = MutableStateFlow<ProfitChartConnectionState>(ProfitChartConnectionState.Disconnected)
     private var profitPollingJob: Job? = null
 
@@ -145,6 +163,20 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _statusBannerMessage = MutableStateFlow<String?>(null)
     val statusBannerMessage: StateFlow<String?> = _statusBannerMessage.asStateFlow()
+
+    private val dividendManagementFlow = combine(
+        repository.dividendEventsFlow,
+        repository.financialAuditLogsFlow,
+        _isSyncingDividends,
+        _dividendSyncStatusMessage
+    ) { events, logs, syncing, msg ->
+        DividendManagementBundle(
+            events = events,
+            auditLogs = logs,
+            isSyncing = syncing,
+            syncStatusMessage = msg
+        )
+    }
 
     val smartAlertsState: StateFlow<SmartAlertsUiState> = combine(
         repository.swingAlertsFlow,
@@ -183,7 +215,8 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         _isLiveBatchRefreshing,
         _profitConnectionState,
         repository.priceTargetAlertsFlow,
-        _isCheckingPriceAlerts
+        _isCheckingPriceAlerts,
+        dividendManagementFlow
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         val positions = values[0] as List<PortfolioItemView>
@@ -207,6 +240,7 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         @Suppress("UNCHECKED_CAST")
         val alerts = values[12] as List<PriceTargetAlertEntity>
         val checkingAlerts = values[13] as Boolean
+        val divBundle = values[14] as DividendManagementBundle
 
         val realPos = positions.filter { it.portfolioType == PortfolioType.REAL }
         val simPos = positions.filter { it.portfolioType == PortfolioType.SIMULATION }
@@ -251,7 +285,11 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
             isLiveBatchRefreshing = batchRefreshing,
             profitConnectionState = profitState,
             priceTargetAlerts = alerts,
-            isCheckingPriceAlerts = checkingAlerts
+            isCheckingPriceAlerts = checkingAlerts,
+            dividendEvents = divBundle.events,
+            financialAuditLogs = divBundle.auditLogs,
+            isSyncingDividends = divBundle.isSyncing,
+            dividendSyncStatusMessage = divBundle.syncStatusMessage.ifBlank { prefs.lastDividendAutoSyncMessage }
         )
     }.stateIn(
         scope = viewModelScope,
@@ -271,6 +309,8 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                 Log.e("InvestViewModel", "Falha ao inicializar dados locais padrão", err)
                 _statusBannerMessage.value = "Aviso de banco local: ${err.localizedMessage ?: "falha na inicialização"}"
             }
+            // Sincronização automática de proventos na abertura do app (respeitando TTL de 30 min)
+            syncPortfolioDividends(forceRefresh = false, showUserBanner = false)
         }
         viewModelScope.launch {
             repository.preferencesFlow
@@ -1614,5 +1654,252 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
             _statusBannerMessage.value = "Nenhuma meta de investimento alcançada ainda."
         }
         return reachedNames
+    }
+
+    // ==================== HISTÓRICO DE PROVENTOS & GERENCIAMENTO GLOBAL ====================
+
+    fun saveDividendEvent(
+        id: Long?,
+        ticker: String,
+        eventType: DividendEventType,
+        status: DividendStatus,
+        exDate: String,
+        paymentDate: String,
+        unitAmount: Double,
+        quantityReference: Double,
+        totalAmount: Double,
+        source: String,
+        notes: String,
+        isRecurring: Boolean
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    repository.saveDividendEvent(
+                        id = id,
+                        ticker = ticker,
+                        eventType = eventType,
+                        status = status,
+                        exDate = exDate,
+                        paymentDate = paymentDate,
+                        unitAmount = unitAmount,
+                        quantityReference = quantityReference,
+                        totalAmount = totalAmount,
+                        source = source,
+                        notes = notes,
+                        isRecurring = isRecurring
+                    )
+                }
+            }.onSuccess {
+                val action = if (id != null && id > 0L) "atualizado" else "cadastrado"
+                _statusBannerMessage.value = "Provento de ${ticker.trim().uppercase()} (${status.label}) $action com sucesso."
+            }.onFailure { err ->
+                if (err is CancellationException) throw err
+                _statusBannerMessage.value = "Erro ao salvar provento: ${err.localizedMessage ?: "falha local"}"
+            }
+        }
+    }
+
+    fun transitionDividendStatus(
+        eventId: Long,
+        draftProjection: DividendDisplayEvent?,
+        targetStatus: DividendStatus,
+        reason: String = ""
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    repository.transitionDividendStatus(
+                        eventId = eventId,
+                        draftProjection = draftProjection,
+                        targetStatus = targetStatus,
+                        reason = reason
+                    )
+                }
+            }.onSuccess {
+                val tkr = draftProjection?.assetTicker ?: "ativo"
+                _statusBannerMessage.value = "Status do provento ($tkr) atualizado para ${targetStatus.label}."
+            }.onFailure { err ->
+                if (err is CancellationException) throw err
+                _statusBannerMessage.value = "Falha ao alterar status: ${err.localizedMessage ?: "erro"}"
+            }
+        }
+    }
+
+    fun softDeleteDividendEvent(eventId: Long, ticker: String) {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    repository.softDeleteDividendEvent(eventId)
+                }
+            }.onSuccess {
+                _statusBannerMessage.value = "Provento de $ticker removido. Disponível para restauração na Auditoria."
+            }.onFailure { err ->
+                if (err is CancellationException) throw err
+                _statusBannerMessage.value = "Erro ao excluir provento: ${err.localizedMessage ?: "falha"}"
+            }
+        }
+    }
+
+    fun restoreDividendEvent(eventId: Long, ticker: String) {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    repository.restoreDividendEvent(eventId)
+                }
+            }.onSuccess {
+                _statusBannerMessage.value = "Provento de $ticker restaurado e totais recalculados."
+            }.onFailure { err ->
+                if (err is CancellationException) throw err
+                _statusBannerMessage.value = "Erro ao restaurar provento: ${err.localizedMessage ?: "falha"}"
+            }
+        }
+    }
+
+    fun renameDividendTicker(oldTicker: String, newTicker: String) {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    repository.renameDividendTicker(oldTicker, newTicker)
+                }
+            }.onSuccess { count ->
+                if (count > 0) {
+                    _statusBannerMessage.value = "Ticker atualizado de ${oldTicker.uppercase()} para ${newTicker.uppercase()} em $count registro(s)."
+                } else {
+                    _statusBannerMessage.value = "Nenhum lançamento encontrado para ${oldTicker.uppercase()}."
+                }
+            }.onFailure { err ->
+                if (err is CancellationException) throw err
+                _statusBannerMessage.value = "Falha ao renomear ticker: ${err.localizedMessage ?: "erro"}"
+            }
+        }
+    }
+
+    fun updatePortfolioOperation(
+        operationId: Long,
+        ticker: String,
+        operationType: OperationType,
+        quantity: Double,
+        unitPrice: Double,
+        dateIso: String,
+        notes: String
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    repository.updateOperationWithRecalc(
+                        operationId = operationId,
+                        ticker = ticker,
+                        operationType = operationType,
+                        quantity = quantity,
+                        unitPrice = unitPrice,
+                        dateIso = dateIso,
+                        notes = notes
+                    )
+                }
+            }.onSuccess { ok ->
+                if (ok) {
+                    _statusBannerMessage.value = "Operação de ${ticker.trim().uppercase()} atualizada e indicadores recalculados."
+                }
+            }.onFailure { err ->
+                if (err is CancellationException) throw err
+                _statusBannerMessage.value = "Erro ao editar operação: ${err.localizedMessage ?: "falha"}"
+            }
+        }
+    }
+
+    fun restoreFromAuditLog(auditId: Long) {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    repository.restoreFromAuditLog(auditId)
+                }
+            }.onSuccess { msg ->
+                _statusBannerMessage.value = msg
+            }.onFailure { err ->
+                if (err is CancellationException) throw err
+                _statusBannerMessage.value = "Erro ao restaurar registro: ${err.localizedMessage ?: "falha"}"
+            }
+        }
+    }
+
+    fun refreshDividendsNow() {
+        viewModelScope.launch {
+            syncPortfolioDividends(forceRefresh = true, showUserBanner = true)
+        }
+    }
+
+    private suspend fun syncPortfolioDividends(forceRefresh: Boolean, showUserBanner: Boolean) {
+        if (_isSyncingDividends.value) return
+        val now = System.currentTimeMillis()
+        val prefs = runCatching { withContext(Dispatchers.IO) { prefsManager.getCurrentPreferences() } }.getOrNull()
+        val ttlMs = 30L * 60L * 1000L // 30 minutos de cache para evitar consultas redundantes na abertura
+        if (!forceRefresh && prefs != null && (now - prefs.lastDividendAutoSyncEpochMs) < ttlMs) {
+            return
+        }
+
+        // Aguarda um breve instante na inicialização para os fluxos do Room popularem realPositions
+        if (!forceRefresh && dashboardState.value.realPositions.isEmpty()) {
+            delay(800L)
+        }
+        val realPositions = dashboardState.value.realPositions.filter { it.quantity > 0.0 }
+        if (realPositions.isEmpty()) {
+            if (showUserBanner) {
+                _statusBannerMessage.value = "Cadastre ativos na Carteira Real para sincronizar proventos automaticamente."
+            }
+            return
+        }
+
+        _isSyncingDividends.value = true
+        _dividendSyncStatusMessage.value = "Sincronizando proventos de ${realPositions.size} ativo(s)..."
+        try {
+            val freshQuotes = mutableMapOf<String, LiveMarketQuote>()
+            freshQuotes.putAll(dashboardState.value.liveQuotesByTicker)
+
+            if (forceRefresh) {
+                val tickers = realPositions.map { it.ticker.trim().uppercase() }.distinct().take(20)
+                val fetched: Map<String, LiveMarketQuote> = withContext(Dispatchers.IO) {
+                    runCatching { liveMarketRepository.fetchBatchQuotes(tickers) }.getOrDefault(emptyMap())
+                }
+                if (fetched.isNotEmpty()) {
+                    freshQuotes.putAll(fetched)
+                    _liveQuotesByTicker.value = _liveQuotesByTicker.value + fetched
+                    withContext(Dispatchers.IO) {
+                        repository.saveCachedLiveQuotes(fetched.values)
+                    }
+                }
+            }
+
+            val result = withContext(Dispatchers.IO) {
+                repository.syncConfirmedDividendsFromQuotes(realPositions, freshQuotes)
+            }
+            val timeFmt = java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale("pt", "BR")).format(java.util.Date(now))
+            val summary = buildString {
+                append("Atualizado em $timeFmt")
+                if (result.createdCount > 0) append(" • +${result.createdCount} confirmado(s)")
+                if (result.updatedCount > 0) append(" • ${result.updatedCount} atualizado(s)")
+                if (result.divergencesCount > 0) append(" • ${result.divergencesCount} divergência(s) sinalizada(s)")
+                if (result.createdCount == 0 && result.updatedCount == 0 && result.divergencesCount == 0) {
+                    append(" • Sem novos anúncios")
+                }
+            }
+            _dividendSyncStatusMessage.value = summary
+            withContext(Dispatchers.IO) {
+                repository.updateDividendAutoSyncStatus(now, summary)
+            }
+            if (showUserBanner) {
+                _statusBannerMessage.value = summary
+            }
+        } catch (err: Exception) {
+            if (err is CancellationException) throw err
+            Log.w("InvestViewModel", "Falha na sincronização automática de proventos (dados anteriores preservados)", err)
+            val fallbackMsg = "Atualização pendente • dados anteriores preservados"
+            _dividendSyncStatusMessage.value = fallbackMsg
+            if (showUserBanner) {
+                _statusBannerMessage.value = "$fallbackMsg (${err.localizedMessage ?: "sem conexão"})"
+            }
+        } finally {
+            _isSyncingDividends.value = false
+        }
     }
 }

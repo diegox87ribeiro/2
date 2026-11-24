@@ -120,14 +120,21 @@ fun PortfolioScreen(
     orderScreenshotState: OrderScreenshotRecognitionState = OrderScreenshotRecognitionState.Idle,
     onRecognizeOrderScreenshot: (android.net.Uri) -> Unit = {},
     onConfirmScreenshotOrders: (PortfolioType, List<RecognizedOrderDraft>, Boolean) -> Unit = { _, _, _ -> },
-    onDismissScreenshotReview: () -> Unit = {}
+    onDismissScreenshotReview: () -> Unit = {},
+    onUpdateOperation: (Long, String, OperationType, Double, Double, String, String) -> Unit = { _, _, _, _, _, _, _ -> },
+    onDeleteOperation: (Long) -> Unit = {},
+    onRestoreAuditEntry: (Long) -> Unit = {}
 ) {
     val context = LocalContext.current
     var showAddPositionDialog by remember { mutableStateOf(false) }
     var showOperationDialog by remember { mutableStateOf(false) }
     var showCashDialog by remember { mutableStateOf(false) }
     var showSpecDialog by remember { mutableStateOf(false) }
+    var showAuditDialog by remember { mutableStateOf(false) }
     var selectedPositionForEdit by remember { mutableStateOf<PortfolioItemView?>(null) }
+    var pendingDeletePosition by remember { mutableStateOf<PortfolioItemView?>(null) }
+    var selectedOperationForEdit by remember { mutableStateOf<com.example.data.local.PortfolioOperationEntity?>(null) }
+    var pendingDeleteOperation by remember { mutableStateOf<com.example.data.local.PortfolioOperationEntity?>(null) }
 
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -422,11 +429,20 @@ fun PortfolioScreen(
                         }
                     }
 
-                    if (activePositions.isNotEmpty()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                            horizontalArrangement = Arrangement.End
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(
+                            onClick = { showAuditDialog = true },
+                            modifier = Modifier.testTag("portfolio_open_audit_button")
                         ) {
+                            Icon(Icons.Default.History, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Auditoria / Restaurar (${state.financialAuditLogs.size})", color = ElectricCyan)
+                        }
+                        if (activePositions.isNotEmpty()) {
                             TextButton(onClick = { onClearPortfolio(selectedType) }) {
                                 Text("Limpar ${selectedType.label}", color = CoralRed)
                             }
@@ -455,7 +471,7 @@ fun PortfolioScreen(
                     PositionCard(
                         pos = pos,
                         onOpenCadastroAndEdit = { selectedPositionForEdit = pos },
-                        onDelete = { onDeletePosition(pos.id) }
+                        onDelete = { pendingDeletePosition = pos }
                     )
                 }
             }
@@ -463,18 +479,51 @@ fun PortfolioScreen(
             if (activeOps.isNotEmpty()) {
                 item {
                     FintechCard {
-                        Text("Operações e Proventos Recentes", style = MaterialTheme.typography.titleMedium)
+                        Text("Operações e Proventos Recentes (${activeOps.size})", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Edite ou exclua qualquer lançamento com recálculo automático de quantidade e preço médio.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextSecondary
+                        )
                         Spacer(Modifier.height(8.dp))
-                        activeOps.take(8).forEach { op ->
+                        activeOps.take(15).forEach { op ->
                             Row(
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text("${op.ticker} • ${op.operationType}", style = MaterialTheme.typography.bodyMedium)
-                                    Text("${op.dateIso} • ${op.notes}", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                                    Text(
+                                        "${op.dateIso} • ${"%.2f".format(op.quantity)} × ${formatBrl(op.unitPrice)}" +
+                                            if (op.notes.isNotBlank()) " • ${op.notes}" else "",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextSecondary
+                                    )
                                 }
                                 Text(formatBrl(op.totalValue), style = MonoValueStyle, color = EmeraldPrimary)
+                                IconButton(
+                                    onClick = { selectedOperationForEdit = op },
+                                    modifier = Modifier.testTag("edit_operation_button_${op.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription = "Editar operação ${op.ticker}",
+                                        tint = ElectricCyan,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { pendingDeleteOperation = op },
+                                    modifier = Modifier.testTag("delete_operation_button_${op.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Excluir operação ${op.ticker}",
+                                        tint = CoralRed,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -592,10 +641,55 @@ fun PortfolioScreen(
                 )
                 selectedPositionForEdit = null
             },
-            onDelete = { id ->
-                onDeletePosition(id)
+            onDelete = { _ ->
+                pendingDeletePosition = editingPos
                 selectedPositionForEdit = null
             }
+        )
+    }
+
+    pendingDeletePosition?.let { pos ->
+        DeleteConfirmImpactDialog(
+            title = "Excluir Ativo da Carteira?",
+            entitySummary = "${pos.ticker} • ${"%.2f".format(pos.quantity)} unid. • ${formatBrl(pos.totalCurrentBrl)}",
+            impactDescription = "O ativo será removido da carteira atual e os totais de patrimônio e HHI serão recalculados. O histórico de operações e proventos permanece preservado.",
+            onDismiss = { pendingDeletePosition = null },
+            onConfirm = {
+                onDeletePosition(pos.id)
+                pendingDeletePosition = null
+            }
+        )
+    }
+
+    selectedOperationForEdit?.let { op ->
+        EditOperationDialog(
+            operation = op,
+            onDismiss = { selectedOperationForEdit = null },
+            onConfirm = { opId, ticker, opType, qty, price, dateIso, notes ->
+                onUpdateOperation(opId, ticker, opType, qty, price, dateIso, notes)
+                selectedOperationForEdit = null
+            }
+        )
+    }
+
+    pendingDeleteOperation?.let { op ->
+        DeleteConfirmImpactDialog(
+            title = "Excluir Operação?",
+            entitySummary = "${op.ticker} • ${op.operationType} • ${op.dateIso} • ${formatBrl(op.totalValue)}",
+            impactDescription = "Ao excluir esta operação, a posição, o preço médio e os proventos vinculados serão recalculados automaticamente.",
+            onDismiss = { pendingDeleteOperation = null },
+            onConfirm = {
+                onDeleteOperation(op.id)
+                pendingDeleteOperation = null
+            }
+        )
+    }
+
+    if (showAuditDialog) {
+        AuditAndRestoreDialog(
+            auditLogs = state.financialAuditLogs,
+            onDismiss = { showAuditDialog = false },
+            onRestoreAuditEntry = onRestoreAuditEntry
         )
     }
 

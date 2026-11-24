@@ -1529,5 +1529,219 @@ class InvestAiCoreTests {
             )
         )
     }
+
+    @Test
+    fun `dividend history engine enforces mutually exclusive statuses, isCyclical projections, independent KPIs, filters, and CSV export`() {
+        val refYmd = Triple(2026, 11, 10) // 10/11/2026
+
+        val recurringFii = PortfolioItemView(
+            id = 1L,
+            portfolioType = PortfolioType.REAL,
+            ticker = "EGAF11",
+            name = "Ecoagro FIAGRO",
+            assetClass = AssetClass.FIAGRO,
+            quantity = 25.0,
+            averagePrice = 80.38,
+            currentPrice = 70.99,
+            sector = "Fiagro",
+            dataComDay = 10,
+            dataSourceLabel = "Carteira",
+            isDemo = false,
+            hasMarketPrice = true,
+            isCyclical = true
+        )
+        val nonRecurringStock = PortfolioItemView(
+            id = 2L,
+            portfolioType = PortfolioType.REAL,
+            ticker = "WEGE3",
+            name = "WEG ON",
+            assetClass = AssetClass.ACOES_BR,
+            quantity = 10.0,
+            averagePrice = 40.0,
+            currentPrice = 45.0,
+            sector = "Indústria",
+            dataComDay = null,
+            dataSourceLabel = "Carteira",
+            isDemo = false,
+            hasMarketPrice = true,
+            isCyclical = false
+        )
+
+        val liveQuotes = mapOf(
+            "EGAF11" to com.example.domain.model.LiveMarketQuote(
+                ticker = "EGAF11",
+                companyName = "Ecoagro",
+                price = 70.99,
+                changePercent1d = 0.2,
+                lastDividendBrl = 0.82,
+                dataComDay = 10,
+                paymentDay = 17,
+                primarySourceLabel = "B3 Oficial",
+                consultedSources = listOf("B3 Oficial"),
+                marketTimestampLabel = "10/11/2026",
+                b3PageUrl = "",
+                advfnPageUrl = "",
+                fetchedAtMillis = 1_763_000_000_000L
+            )
+        )
+
+        val persistedEvents = listOf(
+            com.example.data.local.DividendEventEntity(
+                id = 10L,
+                assetTicker = "EGAF11",
+                eventType = com.example.domain.model.DividendEventType.RENDIMENTO_FIAGRO.name,
+                status = com.example.domain.model.DividendStatus.RECEIVED.name,
+                exDate = "10/10/2026",
+                paymentDate = "17/10/2026",
+                unitAmount = 0.82,
+                quantityReference = 25.0,
+                totalAmount = 20.50,
+                source = "Manual"
+            ),
+            com.example.data.local.DividendEventEntity(
+                id = 11L,
+                assetTicker = "EGAF11",
+                eventType = com.example.domain.model.DividendEventType.RENDIMENTO_FIAGRO.name,
+                status = com.example.domain.model.DividendStatus.CONFIRMED.name,
+                exDate = "10/11/2026",
+                paymentDate = "17/11/2026",
+                unitAmount = 0.85,
+                quantityReference = 25.0,
+                totalAmount = 21.25,
+                source = "AutoSync"
+            ),
+            // Ativo cadastrado apenas com dividendo (sem posição na carteira)
+            com.example.data.local.DividendEventEntity(
+                id = 12L,
+                assetTicker = "DIVONLY11",
+                eventType = com.example.domain.model.DividendEventType.DIVIDENDO.name,
+                status = com.example.domain.model.DividendStatus.RECEIVED.name,
+                exDate = "05/10/2026",
+                paymentDate = "15/10/2026",
+                unitAmount = 1.00,
+                quantityReference = 10.0,
+                totalAmount = 10.00,
+                source = "Manual"
+            ),
+            // Evento cancelado deve ficar oculto por padrão
+            com.example.data.local.DividendEventEntity(
+                id = 13L,
+                assetTicker = "EGAF11",
+                eventType = com.example.domain.model.DividendEventType.RENDIMENTO_FIAGRO.name,
+                status = com.example.domain.model.DividendStatus.CANCELLED.name,
+                exDate = "10/09/2026",
+                paymentDate = "17/09/2026",
+                unitAmount = 0.80,
+                quantityReference = 25.0,
+                totalAmount = 20.00,
+                source = "Manual"
+            )
+        )
+
+        val snap = com.example.domain.model.DividendHistoryEngine.buildSnapshot(
+            persistedEvents = persistedEvents,
+            realPositions = listOf(recurringFii, nonRecurringStock),
+            marketAssets = MarketCatalogRepository.catalogAssets,
+            liveQuotesByTicker = liveQuotes,
+            filter = com.example.domain.model.DividendFilterState(period = com.example.domain.model.DividendPeriodFilter.ALL),
+            referenceYmd = refYmd,
+            projectionHorizonMonths = 4
+        )
+
+        // Totais independentes (nunca mistura Recebido com Confirmado ou Projetado)
+        assertEquals(30.50, snap.totalReceivedBrl, 0.01) // 20.50 + 10.00
+        assertEquals(21.25, snap.totalConfirmedBrl, 0.01)
+        assertEquals(2, snap.receivedPaymentsCount)
+        assertEquals(1, snap.confirmedPaymentsCount)
+
+        // Novembro já tem CONFIRMADO de EGAF11 -> projeção só existe para Dez/2026, Jan/2027, Fev/2027 (3 meses)
+        val egafProjected = snap.filteredEvents.filter {
+            it.assetTicker == "EGAF11" && it.status == com.example.domain.model.DividendStatus.PROJECTED
+        }
+        assertEquals(3, egafProjected.size)
+        assertEquals(20.50 * 3, snap.totalProjectedBrl, 0.01)
+
+        // WEGE3 tem isCyclical == false -> ZERO projeções automáticas
+        assertTrue(snap.filteredEvents.none { it.assetTicker == "WEGE3" && it.status == com.example.domain.model.DividendStatus.PROJECTED })
+
+        // Evento cancelado oculto por padrão
+        assertTrue(snap.filteredEvents.none { it.status == com.example.domain.model.DividendStatus.CANCELLED })
+
+        // DIVONLY11 detectado como ticker apenas de dividendos
+        assertTrue("DIVONLY11" in snap.dividendOnlyTickers)
+
+        // Próximo pagamento prioriza CONFIRMADO (17/11/2026)
+        assertEquals("17/11/2026", snap.nextExpectedPayment?.paymentDate)
+        assertEquals(com.example.domain.model.DividendStatus.CONFIRMED, snap.nextExpectedPayment?.status)
+
+        // Filtro por status RECEIVED retorna apenas os 2 recebidos e zera confirmado/projetado no snapshot filtrado
+        val onlyReceived = com.example.domain.model.DividendHistoryEngine.buildSnapshot(
+            persistedEvents = persistedEvents,
+            realPositions = listOf(recurringFii, nonRecurringStock),
+            marketAssets = MarketCatalogRepository.catalogAssets,
+            liveQuotesByTicker = liveQuotes,
+            filter = com.example.domain.model.DividendFilterState(
+                period = com.example.domain.model.DividendPeriodFilter.ALL,
+                selectedStatus = com.example.domain.model.DividendStatus.RECEIVED
+            ),
+            referenceYmd = refYmd
+        )
+        assertEquals(2, onlyReceived.filteredEvents.size)
+        assertEquals(30.50, onlyReceived.totalReceivedBrl, 0.01)
+        assertEquals(0.0, onlyReceived.totalConfirmedBrl, 0.01)
+        assertEquals(0.0, onlyReceived.totalProjectedBrl, 0.01)
+
+        // Exportação CSV respeita exatamente os eventos filtrados
+        val csv = com.example.domain.model.DividendHistoryEngine.exportFilteredCsv(onlyReceived.filteredEvents)
+        assertTrue(csv.contains("Data-Com;Data Pagamento;Ativo;Tipo;Valor por Cota;Quantidade;Valor Total;Status;Fonte;Observacoes"))
+        assertTrue(csv.contains("EGAF11"))
+        assertTrue(csv.contains("DIVONLY11"))
+    }
+
+    @Test
+    fun `recalculatePositionFromOperations recalculates weighted average price and quantity after BUY and SELL edits`() {
+        val ops = listOf(
+            com.example.data.local.PortfolioOperationEntity(
+                id = 1L,
+                portfolioType = PortfolioType.REAL.name,
+                ticker = "ITUB4",
+                operationType = OperationType.COMPRA.name,
+                quantity = 100.0,
+                unitPrice = 30.0,
+                totalValue = 3000.0,
+                dateIso = "10/01/2026",
+                notes = "Compra 1"
+            ),
+            com.example.data.local.PortfolioOperationEntity(
+                id = 2L,
+                portfolioType = PortfolioType.REAL.name,
+                ticker = "ITUB4",
+                operationType = OperationType.COMPRA.name,
+                quantity = 100.0,
+                unitPrice = 40.0,
+                totalValue = 4000.0,
+                dateIso = "15/02/2026",
+                notes = "Compra 2"
+            ),
+            com.example.data.local.PortfolioOperationEntity(
+                id = 3L,
+                portfolioType = PortfolioType.REAL.name,
+                ticker = "ITUB4",
+                operationType = OperationType.VENDA.name,
+                quantity = 50.0,
+                unitPrice = 42.0,
+                totalValue = 2100.0,
+                dateIso = "20/03/2026",
+                notes = "Venda parcial"
+            )
+        )
+
+        val res = com.example.domain.model.DividendHistoryEngine.recalculatePositionFromOperations(null, ops)
+        assertTrue(res.hadBuyOrSellOperations)
+        assertEquals(150.0, res.quantity, 0.001)
+        // PM ponderado após 100@30 + 100@40 = 35.00; venda parcial mantém PM = 35.00
+        assertEquals(35.0, res.averagePrice, 0.001)
+    }
 }
+
 

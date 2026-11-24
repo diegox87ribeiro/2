@@ -653,3 +653,140 @@ fun EditCashDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
     )
 }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun EditOperationDialog(
+    operation: com.example.data.local.PortfolioOperationEntity,
+    onDismiss: () -> Unit,
+    onConfirm: (
+        operationId: Long,
+        ticker: String,
+        opType: OperationType,
+        quantity: Double,
+        unitPrice: Double,
+        dateIso: String,
+        notes: String
+    ) -> Unit
+) {
+    val initialType = runCatching { OperationType.valueOf(operation.operationType) }.getOrDefault(OperationType.COMPRA)
+    var ticker by remember(operation) { mutableStateOf(operation.ticker) }
+    var opType by remember(operation) { mutableStateOf(initialType) }
+    var expanded by remember { mutableStateOf(false) }
+    var qtyText by remember(operation) { mutableStateOf("%.2f".format(operation.quantity).replace(".", ",")) }
+    var priceText by remember(operation) { mutableStateOf("%.2f".format(operation.unitPrice).replace(".", ",")) }
+    var dateIso by remember(operation) { mutableStateOf(operation.dateIso) }
+    var notes by remember(operation) { mutableStateOf(operation.notes) }
+
+    val parsedQty = qtyText.replace(".", "").replace(",", ".").toDoubleOrNull()
+        ?: qtyText.replace(",", ".").toDoubleOrNull() ?: 0.0
+    val parsedPrice = priceText.replace(".", "").replace(",", ".").toDoubleOrNull()
+        ?: priceText.replace(",", ".").toDoubleOrNull() ?: 0.0
+    val isValid = ticker.trim().length >= 3 && parsedQty > 0.0 && parsedPrice > 0.0 && dateIso.trim().isNotBlank()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Editar Operação • ${operation.ticker}") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Ao salvar, a quantidade, o preço médio e os indicadores da carteira são recalculados automaticamente.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ElectricCyan
+                )
+                ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
+                    OutlinedTextField(
+                        value = opType.label,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Tipo") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                        modifier = Modifier.menuAnchor().fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                        OperationType.entries.forEach { t ->
+                            DropdownMenuItem(text = { Text(t.label) }, onClick = { opType = t; expanded = false })
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = ticker,
+                    onValueChange = { ticker = it.uppercase() },
+                    label = { Text("Ativo / Ticker") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("edit_operation_ticker_input")
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = qtyText,
+                        onValueChange = { qtyText = it },
+                        label = { Text("Quantidade") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("edit_operation_qty_input")
+                    )
+                    OutlinedTextField(
+                        value = priceText,
+                        onValueChange = { priceText = it },
+                        label = { Text("Valor Unit. (R$)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("edit_operation_price_input")
+                    )
+                }
+                OutlinedTextField(
+                    value = dateIso,
+                    onValueChange = { dateIso = it },
+                    label = { Text("Data (dd/MM/aaaa)") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("edit_operation_date_input")
+                )
+                OutlinedTextField(
+                    value = notes,
+                    onValueChange = { notes = it },
+                    label = { Text("Observação") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onConfirm(
+                        operation.id,
+                        ticker.trim().uppercase(),
+                        opType,
+                        parsedQty,
+                        parsedPrice,
+                        dateIso.trim(),
+                        notes.trim()
+                    )
+                },
+                enabled = isValid,
+                colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary, contentColor = EmeraldOnPrimary),
+                modifier = Modifier.testTag("edit_operation_save_button")
+            ) {
+                Text("Salvar Alterações")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancelar") }
+        }
+    )
+}
+

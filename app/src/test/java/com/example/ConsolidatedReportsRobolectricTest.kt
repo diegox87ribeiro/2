@@ -10,6 +10,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
+import kotlinx.coroutines.flow.first
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -1373,5 +1375,230 @@ class ConsolidatedReportsRobolectricTest {
         org.junit.Assert.assertEquals(167625.0, win.unitPrice, 0.01)
         org.junit.Assert.assertEquals(49.60, win.computedTotalValue, 0.01)
     }
+
+    @Test
+    fun `dividend management helper persists CRUD, renames dividend-only ticker, prevents duplicate auto-sync, and restores deleted records with PM recalc`() = kotlinx.coroutines.runBlocking {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        val db = androidx.room.Room.inMemoryDatabaseBuilder(
+            context,
+            com.example.data.local.InvestDatabase::class.java
+        ).allowMainThreadQueries().build()
+
+        try {
+            val helper = com.example.data.repository.DividendManagementHelper(
+                portfolioDao = db.portfolioDao(),
+                dividendEventDao = db.dividendEventDao(),
+                onMirrorRealPositions = {},
+                onMirrorRealOperation = {}
+            )
+
+            // 1. Cadastra provento de ativo sem posição na carteira (apenas dividendo)
+            val divId = helper.saveDividendEvent(
+                id = null,
+                ticker = "ERRADO11",
+                eventType = com.example.domain.model.DividendEventType.RENDIMENTO_FII,
+                status = com.example.domain.model.DividendStatus.RECEIVED,
+                exDate = "10/11/2026",
+                paymentDate = "17/11/2026",
+                unitAmount = 0.90,
+                quantityReference = 10.0,
+                totalAmount = 9.00,
+                source = "Manual",
+                notes = "Teste",
+                isRecurring = true
+            )
+            org.junit.Assert.assertTrue(divId > 0L)
+
+            // 2. Renomeia o ticker do ativo que só tem dividendo
+            val renamedCount = helper.renameDividendTicker("ERRADO11", "MXRF11")
+            org.junit.Assert.assertTrue(renamedCount >= 1)
+            val reloaded = db.dividendEventDao().getById(divId)
+            org.junit.Assert.assertEquals("MXRF11", reloaded?.assetTicker)
+
+            // 3. Soft-delete + restauração via log de auditoria
+            org.junit.Assert.assertTrue(helper.softDeleteDividendEvent(divId))
+            org.junit.Assert.assertTrue(db.dividendEventDao().getById(divId)?.isDeleted == true)
+            val deleteLog = db.dividendEventDao().observeAuditLogs(20).first()
+                .first { it.entityType == "DIVIDEND_EVENT" && it.actionType == "DELETE" }
+            val restoreMsg = helper.restoreFromAuditLog(deleteLog.id)
+            org.junit.Assert.assertTrue(restoreMsg.contains("restaurado", ignoreCase = true))
+            org.junit.Assert.assertTrue(db.dividendEventDao().getById(divId)?.isDeleted == false)
+
+            // 4. Auto-sync cria CONFIRMADO e não duplica na segunda execução
+            val pos = com.example.domain.model.PortfolioItemView(
+                id = 1L,
+                portfolioType = com.example.domain.model.PortfolioType.REAL,
+                ticker = "EGAF11",
+                name = "Ecoagro",
+                assetClass = com.example.domain.model.AssetClass.FIAGRO,
+                quantity = 25.0,
+                averagePrice = 80.0,
+                currentPrice = 71.0,
+                sector = "Fiagro",
+                dataComDay = 10,
+                dataSourceLabel = "Carteira",
+                isDemo = false,
+                hasMarketPrice = true,
+                isCyclical = true
+            )
+            val quote = com.example.domain.model.LiveMarketQuote(
+                ticker = "EGAF11",
+                companyName = "Ecoagro",
+                price = 71.0,
+                changePercent1d = 0.0,
+                lastDividendBrl = 0.82,
+                dataComDay = 10,
+                paymentDay = 17,
+                primarySourceLabel = "B3 Oficial",
+                consultedSources = listOf("B3 Oficial"),
+                marketTimestampLabel = "17/11/2026",
+                b3PageUrl = "",
+                advfnPageUrl = "",
+                fetchedAtMillis = 1_763_000_000_000L
+            )
+            val firstSync = helper.syncConfirmedDividendsFromQuotes(listOf(pos), mapOf("EGAF11" to quote))
+            org.junit.Assert.assertEquals(1, firstSync.createdCount)
+            val secondSync = helper.syncConfirmedDividendsFromQuotes(listOf(pos), mapOf("EGAF11" to quote))
+            org.junit.Assert.assertEquals(0, secondSync.createdCount)
+
+            // 5. Edição de operação COMPRA recalcula preço médio da posição
+            val posId = db.portfolioDao().insertPosition(
+                com.example.data.local.PortfolioPositionEntity(
+                    portfolioType = com.example.domain.model.PortfolioType.REAL.name,
+                    ticker = "ITUB4",
+                    name = "Itaú",
+                    assetClass = com.example.domain.model.AssetClass.ACOES_BR.name,
+                    quantity = 10.0,
+                    averagePrice = 30.0,
+                    currentPrice = 35.0,
+                    hasMarketPrice = true,
+                    sector = "Bancos",
+                    dataComDay = 30,
+                    dataSourceLabel = "Manual"
+                )
+            )
+            val opId = db.portfolioDao().insertOperation(
+                com.example.data.local.PortfolioOperationEntity(
+                    portfolioType = com.example.domain.model.PortfolioType.REAL.name,
+                    ticker = "ITUB4",
+                    operationType = com.example.domain.model.OperationType.COMPRA.name,
+                    quantity = 10.0,
+                    unitPrice = 30.0,
+                    totalValue = 300.0,
+                    dateIso = "10/11/2026",
+                    notes = "Compra inicial"
+                )
+            )
+            helper.updateOperationWithRecalc(
+                operationId = opId,
+                ticker = "ITUB4",
+                operationType = com.example.domain.model.OperationType.COMPRA,
+                quantity = 20.0,
+                unitPrice = 32.50,
+                dateIso = "10/11/2026",
+                notes = "Compra editada"
+            )
+            val updatedPos = db.portfolioDao().getPositionById(posId)
+            org.junit.Assert.assertEquals(20.0, updatedPos?.quantity ?: 0.0, 0.001)
+            org.junit.Assert.assertEquals(32.50, updatedPos?.averagePrice ?: 0.0, 0.001)
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun `DividendCalendarScreen displays Historico de Proventos KPIs, 3-series chart, and allows editing dividend-only ticker`() {
+        var renamedPair: Pair<String, String>? = null
+        val divOnlyEvent = com.example.data.local.DividendEventEntity(
+            id = 77L,
+            assetTicker = "ONLYDIV11",
+            eventType = com.example.domain.model.DividendEventType.DIVIDENDO.name,
+            status = com.example.domain.model.DividendStatus.RECEIVED.name,
+            exDate = "05/11/2026",
+            paymentDate = "15/11/2026",
+            unitAmount = 1.20,
+            quantityReference = 10.0,
+            totalAmount = 12.00,
+            source = "Manual"
+        )
+        val state = com.example.ui.viewmodel.InvestDashboardState(
+            dividendEvents = listOf(divOnlyEvent)
+        )
+
+        composeRule.setContent {
+            InvestAiTheme {
+                com.example.ui.screens.DividendCalendarScreen(
+                    state = state,
+                    onRenameDividendTicker = { oldT, newT -> renamedPair = oldT to newT }
+                )
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("dividend_history_header").assertIsDisplayed()
+        composeRule.onNodeWithTag("dividend_calendar_lazy_column")
+            .performScrollToNode(hasTestTag("edit_dividend_only_ticker_ONLYDIV11"))
+        composeRule.onNodeWithTag("edit_dividend_only_ticker_ONLYDIV11").performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("rename_dividend_ticker_input").performTextReplacement("KNSC11")
+        composeRule.onNodeWithTag("rename_dividend_ticker_confirm").performClick()
+        composeRule.waitForIdle()
+
+        org.junit.Assert.assertEquals("ONLYDIV11" to "KNSC11", renamedPair)
+    }
+
+    @Test
+    fun `PortfolioScreen opens EditOperationDialog when clicking edit on an operation`() {
+        val op = com.example.data.local.PortfolioOperationEntity(
+            id = 55L,
+            portfolioType = com.example.domain.model.PortfolioType.REAL.name,
+            ticker = "VALE3",
+            operationType = com.example.domain.model.OperationType.COMPRA.name,
+            quantity = 10.0,
+            unitPrice = 60.0,
+            totalValue = 600.0,
+            dateIso = "10/11/2026",
+            notes = "Compra teste"
+        )
+        val state = com.example.ui.viewmodel.InvestDashboardState(
+            operations = listOf(op)
+        )
+
+        composeRule.setContent {
+            InvestAiTheme {
+                com.example.ui.screens.PortfolioScreen(
+                    state = state,
+                    selectedType = com.example.domain.model.PortfolioType.REAL,
+                    importFeedback = null,
+                    pendingImportPreview = null,
+                    onSelectType = {},
+                    onImportUri = {},
+                    onConfirmPendingImport = {},
+                    onDismissPendingImport = {},
+                    onDismissImportFeedback = {},
+                    onBuildTemplateCsv = { "" },
+                    onBuildPortfolioCsv = { "" },
+                    onNotify = {},
+                    onLoadDemoReal = {},
+                    onClearPortfolio = {},
+                    onAddManualPosition = { _, _, _, _, _, _, _, _, _, _ -> },
+                    onRecordOperation = { _, _, _, _, _, _ -> },
+                    onDeletePosition = {},
+                    onUpdateCash = { _, _ -> }
+                )
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("portfolio_lazy_column")
+            .performScrollToNode(hasTestTag("edit_operation_button_55"))
+        composeRule.onNodeWithTag("edit_operation_button_55").performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("edit_operation_ticker_input").assertIsDisplayed()
+        composeRule.onNodeWithTag("edit_operation_save_button").assertIsDisplayed()
+    }
 }
+
 

@@ -40,7 +40,9 @@ data class AppPreferencesState(
     val dividendAlertLeadDays: Int = 3,
     val dividendAlertDataCom: Boolean = true,
     val dividendAlertDataEx: Boolean = true,
-    val dividendAlertSentKeys: Set<String> = emptySet()
+    val dividendAlertSentKeys: Set<String> = emptySet(),
+    val lastDividendAutoSyncEpochMs: Long = 0L,
+    val lastDividendAutoSyncMessage: String = ""
 )
 
 class PreferencesManager(private val context: Context) {
@@ -70,6 +72,8 @@ class PreferencesManager(private val context: Context) {
         val DIV_ALERTS_DATACOM = booleanPreferencesKey("dividend_alerts_datacom")
         val DIV_ALERTS_DATAEX = booleanPreferencesKey("dividend_alerts_dataex")
         val DIV_ALERTS_SENT_KEYS = stringSetPreferencesKey("dividend_alerts_sent_keys")
+        val DIV_LAST_AUTO_SYNC_MS = longPreferencesKey("dividend_last_auto_sync_ms")
+        val DIV_LAST_AUTO_SYNC_MSG = stringPreferencesKey("dividend_last_auto_sync_msg")
     }
 
     val preferencesFlow: Flow<AppPreferencesState> = context.investPrefsDataStore.data.map { prefs ->
@@ -98,7 +102,9 @@ class PreferencesManager(private val context: Context) {
             dividendAlertLeadDays = (prefs[Keys.DIV_ALERTS_LEAD_DAYS] ?: 3).coerceIn(1, 14),
             dividendAlertDataCom = prefs[Keys.DIV_ALERTS_DATACOM] ?: true,
             dividendAlertDataEx = prefs[Keys.DIV_ALERTS_DATAEX] ?: true,
-            dividendAlertSentKeys = prefs[Keys.DIV_ALERTS_SENT_KEYS] ?: emptySet()
+            dividendAlertSentKeys = prefs[Keys.DIV_ALERTS_SENT_KEYS] ?: emptySet(),
+            lastDividendAutoSyncEpochMs = prefs[Keys.DIV_LAST_AUTO_SYNC_MS] ?: 0L,
+            lastDividendAutoSyncMessage = prefs[Keys.DIV_LAST_AUTO_SYNC_MSG] ?: ""
         )
     }
 
@@ -200,6 +206,13 @@ class PreferencesManager(private val context: Context) {
             val existing = prefs[Keys.DIV_ALERTS_SENT_KEYS].orEmpty()
             val merged = (existing + newKeys).toList().takeLast(80).toSet()
             prefs[Keys.DIV_ALERTS_SENT_KEYS] = merged
+        }
+    }
+
+    suspend fun updateDividendAutoSyncStatus(epochMs: Long, message: String) {
+        context.investPrefsDataStore.edit { prefs ->
+            prefs[Keys.DIV_LAST_AUTO_SYNC_MS] = epochMs
+            prefs[Keys.DIV_LAST_AUTO_SYNC_MSG] = message
         }
     }
 }

@@ -93,17 +93,67 @@ interface PortfolioDao {
     @Query("DELETE FROM portfolio_positions WHERE portfolioType = :portfolioType")
     suspend fun clearPositionsByType(portfolioType: String)
 
+    @Query("SELECT * FROM portfolio_positions WHERE id = :id LIMIT 1")
+    suspend fun getPositionById(id: Long): PortfolioPositionEntity?
+
     @Query("SELECT * FROM portfolio_positions WHERE portfolioType = :portfolioType")
     suspend fun getPositionsByType(portfolioType: String): List<PortfolioPositionEntity>
 
     @Query("SELECT externalRefId FROM portfolio_operations WHERE externalRefId != ''")
     suspend fun getExistingExternalRefIds(): List<String>
 
+    @Query("SELECT * FROM portfolio_operations WHERE id = :id LIMIT 1")
+    suspend fun getOperationById(id: Long): PortfolioOperationEntity?
+
+    @Query(
+        """
+        SELECT * FROM portfolio_operations
+        WHERE portfolioType = :portfolioType
+          AND UPPER(TRIM(ticker)) = UPPER(TRIM(:ticker))
+        ORDER BY createdAt ASC, id ASC
+        """
+    )
+    suspend fun getOperationsByTicker(portfolioType: String, ticker: String): List<PortfolioOperationEntity>
+
     @Insert
     suspend fun insertOperation(op: PortfolioOperationEntity): Long
 
     @Insert
     suspend fun insertOperations(ops: List<PortfolioOperationEntity>)
+
+    @Query(
+        """
+        UPDATE portfolio_operations
+        SET ticker = :ticker,
+            operationType = :operationType,
+            quantity = :quantity,
+            unitPrice = :unitPrice,
+            totalValue = :totalValue,
+            dateIso = :dateIso,
+            notes = :notes
+        WHERE id = :id
+        """
+    )
+    suspend fun updateOperationById(
+        id: Long,
+        ticker: String,
+        operationType: String,
+        quantity: Double,
+        unitPrice: Double,
+        totalValue: Double,
+        dateIso: String,
+        notes: String
+    )
+
+    @Query(
+        """
+        UPDATE portfolio_operations
+        SET ticker = :newTicker
+        WHERE UPPER(TRIM(ticker)) = UPPER(TRIM(:oldTicker))
+          AND operationType = 'PROVENTO'
+        """
+    )
+    suspend fun renameProventoOperationsTicker(oldTicker: String, newTicker: String): Int
 
     @Query("DELETE FROM portfolio_operations WHERE portfolioType = :portfolioType")
     suspend fun clearOperationsByType(portfolioType: String)

@@ -23,9 +23,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         Transacao::class,
         AssetSwingAlertEntity::class,
         InvestmentGoalEntity::class,
-        AlertNotificationHistoryEntity::class
+        AlertNotificationHistoryEntity::class,
+        DividendEventEntity::class,
+        FinancialAuditLogEntity::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = false
 )
 abstract class InvestDatabase : RoomDatabase() {
@@ -38,6 +40,7 @@ abstract class InvestDatabase : RoomDatabase() {
     abstract fun priceTargetAlertDao(): PriceTargetAlertDao
     abstract fun cachedMarketQuoteDao(): CachedMarketQuoteDao
     abstract fun smartAlertDao(): SmartAlertDao
+    abstract fun dividendEventDao(): DividendEventDao
 
     companion object {
         @Volatile
@@ -285,6 +288,112 @@ abstract class InvestDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `dividend_events` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `assetTicker` TEXT NOT NULL,
+                        `eventType` TEXT NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `exDate` TEXT NOT NULL,
+                        `paymentDate` TEXT NOT NULL,
+                        `unitAmount` REAL NOT NULL,
+                        `quantityReference` REAL NOT NULL,
+                        `totalAmount` REAL NOT NULL,
+                        `source` TEXT NOT NULL,
+                        `sourceReference` TEXT NOT NULL,
+                        `dedupKey` TEXT NOT NULL,
+                        `isRecurring` INTEGER NOT NULL,
+                        `estimated` INTEGER NOT NULL,
+                        `userEdited` INTEGER NOT NULL,
+                        `syncDivergenceNote` TEXT NOT NULL,
+                        `notes` TEXT NOT NULL,
+                        `legacyOperationId` INTEGER,
+                        `isDeleted` INTEGER NOT NULL,
+                        `deletedAt` INTEGER,
+                        `createdAt` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_dividend_events_assetTicker` ON `dividend_events` (`assetTicker`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_dividend_events_status` ON `dividend_events` (`status`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_dividend_events_paymentDate` ON `dividend_events` (`paymentDate`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_dividend_events_dedupKey` ON `dividend_events` (`dedupKey`)")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `financial_audit_log` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `entityType` TEXT NOT NULL,
+                        `entityId` INTEGER NOT NULL,
+                        `ticker` TEXT NOT NULL,
+                        `actionType` TEXT NOT NULL,
+                        `previousStatus` TEXT NOT NULL,
+                        `newStatus` TEXT NOT NULL,
+                        `previousAmount` REAL,
+                        `newAmount` REAL,
+                        `previousSummary` TEXT NOT NULL,
+                        `newSummary` TEXT NOT NULL,
+                        `restorePayloadJson` TEXT NOT NULL,
+                        `source` TEXT NOT NULL,
+                        `reason` TEXT NOT NULL,
+                        `changedAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_financial_audit_log_entityType` ON `financial_audit_log` (`entityType`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_financial_audit_log_ticker` ON `financial_audit_log` (`ticker`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_financial_audit_log_changedAt` ON `financial_audit_log` (`changedAt`)")
+
+                // Backfill não-destrutivo de todos os PROVENTO já lançados em portfolio_operations
+                db.execSQL(
+                    """
+                    INSERT INTO `dividend_events` (
+                        `assetTicker`, `eventType`, `status`, `exDate`, `paymentDate`,
+                        `unitAmount`, `quantityReference`, `totalAmount`, `source`,
+                        `sourceReference`, `dedupKey`, `isRecurring`, `estimated`,
+                        `userEdited`, `syncDivergenceNote`, `notes`, `legacyOperationId`,
+                        `isDeleted`, `deletedAt`, `createdAt`, `updatedAt`
+                    )
+                    SELECT
+                        UPPER(TRIM(op.ticker)),
+                        CASE
+                            WHEN UPPER(op.notes) LIKE '%JCP%' THEN 'JCP'
+                            WHEN UPPER(op.notes) LIKE '%AMORT%' THEN 'AMORTIZACAO'
+                            WHEN UPPER(op.notes) LIKE '%FIAGRO%' THEN 'RENDIMENTO_FIAGRO'
+                            WHEN UPPER(op.notes) LIKE '%REND%' THEN 'RENDIMENTO_FII'
+                            ELSE 'DIVIDENDO'
+                        END,
+                        'RECEIVED',
+                        '',
+                        op.dateIso,
+                        op.unitPrice,
+                        op.quantity,
+                        op.totalValue,
+                        'Histórico Carteira',
+                        'legacy_op_' || op.id,
+                        UPPER(TRIM(op.ticker)) || '|LEGACY|' || op.id,
+                        0,
+                        0,
+                        0,
+                        '',
+                        op.notes,
+                        op.id,
+                        0,
+                        NULL,
+                        op.createdAt,
+                        op.createdAt
+                    FROM portfolio_operations op
+                    WHERE op.operationType = 'PROVENTO'
+                      AND TRIM(op.ticker) != ''
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getInstance(context: Context): InvestDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -300,7 +409,8 @@ abstract class InvestDatabase : RoomDatabase() {
                         MIGRATION_5_6,
                         MIGRATION_6_7,
                         MIGRATION_7_8,
-                        MIGRATION_8_9
+                        MIGRATION_8_9,
+                        MIGRATION_9_10
                     )
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()

@@ -81,7 +81,7 @@ val ALL_INVEST_MODULES: List<InvestModuleDest> = listOf(
     InvestModuleDest(InvestRoutes.ROUTE_RENDA_FIXA, 7, "Renda Fixa", "Renda Fixa", Icons.Default.AccountBalance, ModuleSection.MERCADOS),
     InvestModuleDest(InvestRoutes.ROUTE_CRIPTO, 8, "Criptomoedas (R$ 500)", "Cripto", Icons.Default.CurrencyBitcoin, ModuleSection.MERCADOS),
 
-    InvestModuleDest(InvestRoutes.ROUTE_CALENDARIO, 9, "Calendário Datas-Com", "Calendário", Icons.Default.CalendarMonth, ModuleSection.INTELIGENCIA),
+    InvestModuleDest(InvestRoutes.ROUTE_CALENDARIO, 9, "Histórico de Proventos", "Proventos", Icons.Default.CalendarMonth, ModuleSection.INTELIGENCIA),
     InvestModuleDest(InvestRoutes.ROUTE_FUNDAMENTALISTA, 10, "Análise Fundamentalista", "Fundam.", Icons.Default.QueryStats, ModuleSection.INTELIGENCIA),
     InvestModuleDest(InvestRoutes.ROUTE_TECNICA, 11, "Análise Técnica", "Técnica", Icons.Default.CandlestickChart, ModuleSection.INTELIGENCIA),
 

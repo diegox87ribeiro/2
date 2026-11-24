@@ -608,7 +608,10 @@ private fun MainScaffoldBody(
                             orderScreenshotState = orderScreenshotState,
                             onRecognizeOrderScreenshot = viewModel::recognizeOrderScreenshot,
                             onConfirmScreenshotOrders = viewModel::commitRecognizedScreenshotOrders,
-                            onDismissScreenshotReview = viewModel::dismissOrderScreenshotReview
+                            onDismissScreenshotReview = viewModel::dismissOrderScreenshotReview,
+                            onUpdateOperation = viewModel::updatePortfolioOperation,
+                            onDeleteOperation = viewModel::deleteOperation,
+                            onRestoreAuditEntry = viewModel::restoreFromAuditLog
                         )
                     }
                     composable(InvestRoutes.ROUTE_ACOES_BR) {
@@ -675,7 +678,17 @@ private fun MainScaffoldBody(
                             onDeleteDividendOperation = viewModel::deleteOperation,
                             onUpdateDividendDateAlerts = viewModel::updateDividendDateAlertConfig,
                             onCheckDividendDateAlertsNow = viewModel::checkDividendDateAlertsNow,
-                            onSendTestDividendDateAlert = viewModel::sendTestDividendDateNotification
+                            onSendTestDividendDateAlert = viewModel::sendTestDividendDateNotification,
+                            onSaveDividendEvent = viewModel::saveDividendEvent,
+                            onTransitionDividendStatus = { eventId, draft, targetStatus ->
+                                viewModel.transitionDividendStatus(eventId, draft, targetStatus)
+                            },
+                            onSoftDeleteDividendEvent = viewModel::softDeleteDividendEvent,
+                            onRestoreDividendEvent = viewModel::restoreDividendEvent,
+                            onRenameDividendTicker = viewModel::renameDividendTicker,
+                            onRefreshDividendsNow = viewModel::refreshDividendsNow,
+                            onRestoreAuditEntry = viewModel::restoreFromAuditLog,
+                            onNotify = viewModel::notifyMessage
                         )
                     }
                     composable(

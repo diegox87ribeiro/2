@@ -36,3 +36,17 @@ val ChartColors = listOf(
     Color(0xFFFB7185),
     Color(0xFF34D399)
 )
+
+// Dark Premium INVEST AI — Histórico de Proventos & Status Semânticos
+val DarkPremiumBg = Color(0xFF081224)
+val DarkPremiumCard = Color(0xFF102040)
+val DarkPremiumCardSecondary = Color(0xFF14294B)
+val DarkPremiumBorder = Color(0xFF1E3A5F)
+val TechBluePrimary = Color(0xFF0878E8)
+val ConfirmedBlue = Color(0xFF28B9FF)
+val ReceivedGreen = Color(0xFF00D68F)
+val ProjectedAmber = Color(0xFFFFC247)
+val CancelledRed = Color(0xFFFF5364)
+val PremiumTextPrimary = Color(0xFFF5F7FA)
+val PremiumTextSecondary = Color(0xFF91A4BE)
+

@@ -30,6 +30,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddCircleOutline
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Schedule
@@ -102,6 +103,8 @@ internal fun MonthlyAssetDividendCard(
     onQuickRecord: (monthIndex: Int) -> Unit,
     onOpenSingleAsset: () -> Unit,
     onDeleteOperation: (Long) -> Unit,
+    onRenameTicker: ((String) -> Unit)? = null,
+    onEditOperation: ((AssetDividendOperationRecord) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var expanded by remember(row.ticker, selectedYear) { mutableStateOf(false) }
@@ -157,6 +160,21 @@ internal fun MonthlyAssetDividendCard(
                         style = MaterialTheme.typography.titleMedium,
                         color = EmeraldPrimary
                     )
+                    if (row.quantity <= 0.0 && onRenameTicker != null) {
+                        IconButton(
+                            onClick = { onRenameTicker(row.ticker) },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("monthly_edit_dividend_only_ticker_${row.ticker}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = stringResource(R.string.cd_edit_dividend_ticker),
+                                tint = AmberGold,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                     row.dataComGroup?.let { GroupBadge(it) }
                     DividendStatusPill(label = statusLabel, color = statusColor)
                 }
@@ -318,6 +336,7 @@ internal fun MonthlyAssetDividendCard(
                     monthOps.forEach { op ->
                         DividendOperationRow(
                             record = op,
+                            onEdit = onEditOperation?.let { cb -> { cb(op) } },
                             onDelete = { onDeleteOperation(op.operationId) }
                         )
                     }
@@ -423,7 +442,9 @@ internal fun SingleAssetMonthlyDetailSection(
     onSelectTicker: (String) -> Unit,
     onSelectMonth: (Int) -> Unit,
     onQuickRecord: (AssetDividendRow, Int) -> Unit,
-    onDeleteOperation: (Long) -> Unit
+    onDeleteOperation: (Long) -> Unit,
+    onRenameTicker: ((String) -> Unit)? = null,
+    onEditOperation: ((AssetDividendOperationRecord) -> Unit)? = null
 ) {
     if (rows.isEmpty()) {
         FintechCard {
@@ -475,6 +496,21 @@ internal fun SingleAssetMonthlyDetailSection(
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(activeRow.ticker, style = MaterialTheme.typography.titleLarge, color = EmeraldPrimary)
+                        if (activeRow.quantity <= 0.0 && onRenameTicker != null) {
+                            IconButton(
+                                onClick = { onRenameTicker(activeRow.ticker) },
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .testTag("single_asset_rename_ticker_${activeRow.ticker}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = stringResource(R.string.cd_edit_dividend_ticker),
+                                    tint = AmberGold,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
                         activeRow.dataComGroup?.let { GroupBadge(it) }
                     }
                     Text(
@@ -620,6 +656,7 @@ internal fun SingleAssetMonthlyDetailSection(
                         monthOps.forEach { op ->
                             DividendOperationRow(
                                 record = op,
+                                onEdit = onEditOperation?.let { cb -> { cb(op) } },
                                 onDelete = { onDeleteOperation(op.operationId) }
                             )
                         }
@@ -636,6 +673,7 @@ internal fun SingleAssetMonthlyDetailSection(
 @Composable
 internal fun DividendOperationRow(
     record: AssetDividendOperationRecord,
+    onEdit: (() -> Unit)? = null,
     onDelete: () -> Unit
 ) {
     Row(
@@ -667,6 +705,19 @@ internal fun DividendOperationRow(
                     color = TextSecondary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        if (onEdit != null) {
+            IconButton(
+                onClick = onEdit,
+                modifier = Modifier.testTag("dividend_edit_op_${record.operationId}")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Edit,
+                    contentDescription = stringResource(R.string.cd_edit_dividend),
+                    tint = ElectricCyan,
+                    modifier = Modifier.size(18.dp)
                 )
             }
         }

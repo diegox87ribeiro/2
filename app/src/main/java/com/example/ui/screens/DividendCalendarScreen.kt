@@ -28,8 +28,8 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -47,7 +47,12 @@ import com.example.R
 import com.example.domain.model.AssetClass
 import com.example.domain.model.DataComGroup
 import com.example.domain.model.DividendDateAlertEvaluator
+import com.example.domain.model.DividendDisplayEvent
+import com.example.domain.model.DividendEventType
+import com.example.domain.model.DividendFilterState
+import com.example.domain.model.DividendHistoryEngine
 import com.example.domain.model.DividendMonitorCalculator
+import com.example.domain.model.DividendStatus
 import com.example.ui.components.DataDisclaimerBanner
 import com.example.ui.components.FilterChipBar
 import com.example.ui.components.FintechCard
@@ -57,6 +62,7 @@ import com.example.ui.components.MonthlyDividendBarChart
 import com.example.ui.components.formatBrl
 import com.example.ui.components.formatPct
 import com.example.ui.theme.AmberGold
+import com.example.ui.theme.DarkPremiumCard
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.EmeraldContainer
 import com.example.ui.theme.EmeraldOnPrimary
@@ -68,6 +74,7 @@ import com.example.ui.viewmodel.InvestDashboardState
 import java.util.Calendar
 
 private enum class DividendScreenTab {
+    HISTORY,
     MONTHLY_CONTROL,
     BY_ASSET_12M,
     DATACOM_GROUPS
@@ -90,16 +97,61 @@ fun DividendCalendarScreen(
     onDeleteDividendOperation: (Long) -> Unit = {},
     onUpdateDividendDateAlerts: (enabled: Boolean, leadDays: Int, notifyDataCom: Boolean, notifyDataEx: Boolean) -> Unit = { _, _, _, _ -> },
     onCheckDividendDateAlertsNow: () -> Unit = {},
-    onSendTestDividendDateAlert: () -> Unit = {}
+    onSendTestDividendDateAlert: () -> Unit = {},
+    onSaveDividendEvent: (
+        id: Long?,
+        ticker: String,
+        eventType: DividendEventType,
+        status: DividendStatus,
+        exDate: String,
+        paymentDate: String,
+        unitAmount: Double,
+        quantityReference: Double,
+        totalAmount: Double,
+        source: String,
+        notes: String,
+        isRecurring: Boolean
+    ) -> Unit = { _, _, _, _, _, _, _, _, _, _, _, _ -> },
+    onTransitionDividendStatus: (Long, DividendDisplayEvent?, DividendStatus) -> Unit = { _, _, _ -> },
+    onSoftDeleteDividendEvent: (Long, String) -> Unit = { _, _ -> },
+    onRestoreDividendEvent: (Long, String) -> Unit = { _, _ -> },
+    onRenameDividendTicker: (String, String) -> Unit = { _, _ -> },
+    onRefreshDividendsNow: () -> Unit = {},
+    onRestoreAuditEntry: (Long) -> Unit = {},
+    onNotify: (String) -> Unit = {}
 ) {
     val nowCal = remember { Calendar.getInstance() }
-    var activeTab by remember { mutableStateOf(DividendScreenTab.MONTHLY_CONTROL) }
+    var activeTab by remember { mutableStateOf(DividendScreenTab.HISTORY) }
     var selectedYear by remember { mutableIntStateOf(nowCal.get(Calendar.YEAR)) }
     var selectedMonthIndex by remember { mutableIntStateOf(nowCal.get(Calendar.MONTH)) }
     var selectedAssetFilter by remember { mutableStateOf(MonthlyAssetFilter.ALL) }
     var selectedSingleTicker by remember { mutableStateOf<String?>(null) }
     var selectedGroup by remember { mutableStateOf<DataComGroup?>(null) }
     var recordDraft by remember { mutableStateOf<DividendRecordDraft?>(null) }
+
+    // Estado do módulo Histórico de Proventos
+    var historyFilter by remember { mutableStateOf(DividendFilterState()) }
+    var eventFormDraft by remember { mutableStateOf<DividendEventFormDraft?>(null) }
+    var pendingDeleteEvent by remember { mutableStateOf<DividendDisplayEvent?>(null) }
+    var inspectingEvent by remember { mutableStateOf<DividendDisplayEvent?>(null) }
+    var renameTickerTarget by remember { mutableStateOf<String?>(null) }
+    var showAuditDialog by remember { mutableStateOf(false) }
+
+    val historySnapshot = remember(
+        state.dividendEvents,
+        state.realPositions,
+        state.marketAssets,
+        state.liveQuotesByTicker,
+        historyFilter
+    ) {
+        DividendHistoryEngine.buildSnapshot(
+            persistedEvents = state.dividendEvents,
+            realPositions = state.realPositions,
+            marketAssets = state.marketAssets,
+            liveQuotesByTicker = state.liveQuotesByTicker,
+            filter = historyFilter
+        )
+    }
 
     val dividendSummary = remember(state.realPositions, state.marketAssets, state.operations, selectedYear) {
         DividendMonitorCalculator.compute(
@@ -233,7 +285,17 @@ fun DividendCalendarScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        TabRow(selectedTabIndex = activeTab.ordinal) {
+        ScrollableTabRow(
+            selectedTabIndex = activeTab.ordinal,
+            containerColor = DarkPremiumCard,
+            edgePadding = 12.dp
+        ) {
+            Tab(
+                selected = activeTab == DividendScreenTab.HISTORY,
+                onClick = { activeTab = DividendScreenTab.HISTORY },
+                text = { Text(stringResource(R.string.dividend_tab_history), maxLines = 1) },
+                modifier = Modifier.testTag("dividend_screen_tab_history")
+            )
             Tab(
                 selected = activeTab == DividendScreenTab.MONTHLY_CONTROL,
                 onClick = { activeTab = DividendScreenTab.MONTHLY_CONTROL },
@@ -261,7 +323,7 @@ fun DividendCalendarScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            if (activeTab != DividendScreenTab.DATACOM_GROUPS) {
+            if (activeTab == DividendScreenTab.MONTHLY_CONTROL || activeTab == DividendScreenTab.BY_ASSET_12M) {
                 item {
                     FintechCard(borderColor = EmeraldPrimary.copy(alpha = 0.4f)) {
                         Row(
@@ -433,6 +495,36 @@ fun DividendCalendarScreen(
             }
 
             when (activeTab) {
+                DividendScreenTab.HISTORY -> {
+                    dividendHistoryTabItems(
+                        snapshot = historySnapshot,
+                        filter = historyFilter,
+                        isSyncingDividends = state.isSyncingDividends,
+                        syncStatusMessage = state.dividendSyncStatusMessage,
+                        auditCount = state.financialAuditLogs.size,
+                        onFilterChange = { historyFilter = it },
+                        onRefreshNow = onRefreshDividendsNow,
+                        onOpenNewEvent = {
+                            val firstPos = state.realPositions.firstOrNull()
+                            eventFormDraft = DividendEventFormDraft(
+                                ticker = firstPos?.ticker.orEmpty(),
+                                quantityReference = firstPos?.quantity ?: 1.0,
+                                isRecurring = firstPos?.isCyclical == true
+                            )
+                        },
+                        onOpenAuditDialog = { showAuditDialog = true },
+                        onOpenRenameTicker = { tkr -> renameTickerTarget = tkr },
+                        onEditEvent = { ev -> eventFormDraft = ev.toEditDraft() },
+                        onTransitionStatus = { ev, targetStatus ->
+                            onTransitionDividendStatus(ev.id, ev, targetStatus)
+                        },
+                        onRequestDeleteEvent = { ev -> pendingDeleteEvent = ev },
+                        onRestoreEvent = { ev -> onRestoreDividendEvent(ev.id, ev.assetTicker) },
+                        onInspectDetails = { ev -> inspectingEvent = ev },
+                        onExportCsvResult = onNotify
+                    )
+                }
+
                 DividendScreenTab.MONTHLY_CONTROL -> {
                     if (dividendSummary.monthlyJanToDec.isNotEmpty() && dividendSummary.perAssetRows.isNotEmpty()) {
                         item {
@@ -517,7 +609,29 @@ fun DividendCalendarScreen(
                                     selectedSingleTicker = row.ticker
                                     activeTab = DividendScreenTab.BY_ASSET_12M
                                 },
-                                onDeleteOperation = onDeleteDividendOperation
+                                onDeleteOperation = onDeleteDividendOperation,
+                                onRenameTicker = { tkr -> renameTickerTarget = tkr },
+                                onEditOperation = { op ->
+                                    val matchingEvent = state.dividendEvents.firstOrNull {
+                                        !it.isDeleted && it.legacyOperationId == op.operationId
+                                    }
+                                    eventFormDraft = DividendEventFormDraft(
+                                        id = matchingEvent?.id,
+                                        ticker = op.ticker,
+                                        eventType = matchingEvent?.let { DividendEventType.fromCode(it.eventType) }
+                                            ?: DividendEventType.infer(row.assetClass, op.notes),
+                                        status = matchingEvent?.let { DividendStatus.fromCode(it.status) }
+                                            ?: DividendStatus.RECEIVED,
+                                        exDate = matchingEvent?.exDate.orEmpty(),
+                                        paymentDate = op.dateIso,
+                                        unitAmount = op.unitValueBrl,
+                                        quantityReference = op.quantity,
+                                        totalAmount = op.totalValueBrl,
+                                        source = matchingEvent?.source ?: "Carteira",
+                                        notes = op.notes,
+                                        isRecurring = row.isCyclical
+                                    )
+                                }
                             )
                         }
                     }
@@ -543,7 +657,29 @@ fun DividendCalendarScreen(
                                     preferredDay = row.paymentDay
                                 )
                             },
-                            onDeleteOperation = onDeleteDividendOperation
+                            onDeleteOperation = onDeleteDividendOperation,
+                            onRenameTicker = { tkr -> renameTickerTarget = tkr },
+                            onEditOperation = { op ->
+                                val matchingEvent = state.dividendEvents.firstOrNull {
+                                    !it.isDeleted && it.legacyOperationId == op.operationId
+                                }
+                                eventFormDraft = DividendEventFormDraft(
+                                    id = matchingEvent?.id,
+                                    ticker = op.ticker,
+                                    eventType = matchingEvent?.let { DividendEventType.fromCode(it.eventType) }
+                                        ?: DividendEventType.infer(null, op.notes),
+                                    status = matchingEvent?.let { DividendStatus.fromCode(it.status) }
+                                        ?: DividendStatus.RECEIVED,
+                                    exDate = matchingEvent?.exDate.orEmpty(),
+                                    paymentDate = op.dateIso,
+                                    unitAmount = op.unitValueBrl,
+                                    quantityReference = op.quantity,
+                                    totalAmount = op.totalValueBrl,
+                                    source = matchingEvent?.source ?: "Carteira",
+                                    notes = op.notes,
+                                    isRecurring = matchingEvent?.isRecurring ?: false
+                                )
+                            }
                         )
                     }
                 }
@@ -676,6 +812,67 @@ fun DividendCalendarScreen(
             onConfirm = { ticker, qty, unitPrice, dateIso, notes ->
                 onRecordDividend(ticker, qty, unitPrice, dateIso, notes)
                 recordDraft = null
+            }
+        )
+    }
+
+    eventFormDraft?.let { draft ->
+        DividendEventFormDialog(
+            draft = draft,
+            realPositions = state.realPositions,
+            onDismiss = { eventFormDraft = null },
+            onSave = { id, ticker, type, status, exDate, paymentDate, unitAmount, qty, total, source, notes, isRec ->
+                onSaveDividendEvent(id, ticker, type, status, exDate, paymentDate, unitAmount, qty, total, source, notes, isRec)
+                eventFormDraft = null
+            }
+        )
+    }
+
+    renameTickerTarget?.let { targetTicker ->
+        RenameDividendTickerDialog(
+            currentTicker = targetTicker,
+            onDismiss = { renameTickerTarget = null },
+            onConfirm = { oldTkr, newTkr ->
+                onRenameDividendTicker(oldTkr, newTkr)
+                renameTickerTarget = null
+            }
+        )
+    }
+
+    pendingDeleteEvent?.let { ev ->
+        DeleteConfirmImpactDialog(
+            title = "Excluir Provento?",
+            entitySummary = "${ev.assetTicker} • ${ev.eventType.label} • ${ev.paymentDate} • ${formatBrl(ev.totalAmount)} (${ev.status.label})",
+            impactDescription = "Os totais de ${ev.status.label}, a média mensal e o gráfico de evolução serão recalculados automaticamente.",
+            onDismiss = { pendingDeleteEvent = null },
+            onConfirm = {
+                onSoftDeleteDividendEvent(ev.id, ev.assetTicker)
+                pendingDeleteEvent = null
+            }
+        )
+    }
+
+    inspectingEvent?.let { ev ->
+        val relatedLogs = state.financialAuditLogs.filter {
+            it.ticker.equals(ev.assetTicker, ignoreCase = true) || (ev.id > 0L && it.entityId == ev.id)
+        }
+        DividendEventDetailDialog(
+            event = ev,
+            relatedAuditLogs = relatedLogs,
+            onDismiss = { inspectingEvent = null },
+            onEdit = {
+                eventFormDraft = ev.toEditDraft()
+                inspectingEvent = null
+            }
+        )
+    }
+
+    if (showAuditDialog) {
+        AuditAndRestoreDialog(
+            auditLogs = state.financialAuditLogs,
+            onDismiss = { showAuditDialog = false },
+            onRestoreAuditEntry = { auditId ->
+                onRestoreAuditEntry(auditId)
             }
         )
     }

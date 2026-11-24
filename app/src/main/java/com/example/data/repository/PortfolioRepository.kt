@@ -55,6 +55,16 @@ class PortfolioRepository(
     private val alertDao: PriceTargetAlertDao = db.priceTargetAlertDao()
     private val cachedQuoteDao: CachedMarketQuoteDao = db.cachedMarketQuoteDao()
     private val smartAlertDao: SmartAlertDao = db.smartAlertDao()
+    private val dividendEventDao: com.example.data.local.DividendEventDao = db.dividendEventDao()
+
+    private val dividendHelper = DividendManagementHelper(
+        portfolioDao = portfolioDao,
+        dividendEventDao = dividendEventDao,
+        onMirrorRealPositions = {
+            mirrorRealPositionsToAtivos(portfolioDao.getPositionsByType(PortfolioType.REAL.name))
+        },
+        onMirrorRealOperation = { op -> mirrorRealOperationToTransacao(op) }
+    )
 
     val carteiraLocalRepository: CarteiraLocalRepository = CarteiraLocalRepository(carteiraLocalDao)
 
@@ -62,6 +72,8 @@ class PortfolioRepository(
     val ativosLocaisFlow: Flow<List<Ativo>> = carteiraLocalRepository.ativosFlow
     val transacoesLocaisFlow: Flow<List<Transacao>> = carteiraLocalRepository.transacoesFlow
     val ativosComTransacoesFlow: Flow<List<AtivoComTransacoes>> = carteiraLocalRepository.ativosComTransacoesFlow
+    val dividendEventsFlow: Flow<List<com.example.data.local.DividendEventEntity>> = dividendEventDao.observeAllDividendEvents()
+    val financialAuditLogsFlow: Flow<List<com.example.data.local.FinancialAuditLogEntity>> = dividendEventDao.observeAuditLogs()
 
     val positionsFlow: Flow<List<PortfolioItemView>> = portfolioDao.observeAllPositions().map { list ->
         list.map { entity ->
@@ -798,14 +810,106 @@ class PortfolioRepository(
             dateIso = resolvedDate,
             notes = notes
         )
-        portfolioDao.insertOperation(opEntity)
+        val opId = portfolioDao.insertOperation(opEntity)
         if (portfolioType == PortfolioType.REAL) {
-            mirrorRealOperationToTransacao(opEntity)
+            mirrorRealOperationToTransacao(opEntity.copy(id = opId))
+            if (operationType == OperationType.PROVENTO) {
+                dividendHelper.mirrorLegacyProventoOperation(
+                    opId = opId,
+                    ticker = opEntity.ticker,
+                    quantity = quantity,
+                    unitPrice = unitPrice,
+                    totalValue = total,
+                    dateIso = resolvedDate,
+                    notes = notes
+                )
+            }
         }
     }
 
     suspend fun deleteOperation(id: Long) {
-        portfolioDao.deleteOperationById(id)
+        dividendHelper.deleteOperationWithAudit(id)
+    }
+
+    suspend fun updateOperationWithRecalc(
+        operationId: Long,
+        ticker: String,
+        operationType: OperationType,
+        quantity: Double,
+        unitPrice: Double,
+        dateIso: String,
+        notes: String
+    ): Boolean = dividendHelper.updateOperationWithRecalc(
+        operationId = operationId,
+        ticker = ticker,
+        operationType = operationType,
+        quantity = quantity,
+        unitPrice = unitPrice,
+        dateIso = dateIso,
+        notes = notes
+    )
+
+    suspend fun saveDividendEvent(
+        id: Long?,
+        ticker: String,
+        eventType: com.example.domain.model.DividendEventType,
+        status: com.example.domain.model.DividendStatus,
+        exDate: String,
+        paymentDate: String,
+        unitAmount: Double,
+        quantityReference: Double,
+        totalAmount: Double,
+        source: String,
+        notes: String,
+        isRecurring: Boolean,
+        reason: String = ""
+    ): Long = dividendHelper.saveDividendEvent(
+        id = id,
+        ticker = ticker,
+        eventType = eventType,
+        status = status,
+        exDate = exDate,
+        paymentDate = paymentDate,
+        unitAmount = unitAmount,
+        quantityReference = quantityReference,
+        totalAmount = totalAmount,
+        source = source,
+        notes = notes,
+        isRecurring = isRecurring,
+        reason = reason
+    )
+
+    suspend fun transitionDividendStatus(
+        eventId: Long,
+        draftProjection: com.example.domain.model.DividendDisplayEvent?,
+        targetStatus: com.example.domain.model.DividendStatus,
+        reason: String = ""
+    ): Long = dividendHelper.transitionDividendStatus(
+        eventId = eventId,
+        draftProjection = draftProjection,
+        targetStatus = targetStatus,
+        reason = reason
+    )
+
+    suspend fun softDeleteDividendEvent(eventId: Long, reason: String = "Exclusão pelo usuário"): Boolean =
+        dividendHelper.softDeleteDividendEvent(eventId, reason)
+
+    suspend fun restoreDividendEvent(eventId: Long): Boolean =
+        dividendHelper.restoreDividendEvent(eventId)
+
+    suspend fun renameDividendTicker(oldTicker: String, newTicker: String): Int =
+        dividendHelper.renameDividendTicker(oldTicker, newTicker)
+
+    suspend fun syncConfirmedDividendsFromQuotes(
+        realPositions: List<PortfolioItemView>,
+        quotesByTicker: Map<String, LiveMarketQuote>
+    ): DividendSyncResult = dividendHelper.syncConfirmedDividendsFromQuotes(realPositions, quotesByTicker)
+
+    suspend fun restoreFromAuditLog(auditId: Long): String =
+        dividendHelper.restoreFromAuditLog(auditId)
+
+    suspend fun updateDividendAutoSyncStatus(epochMs: Long, message: String) {
+        prefs.updateDividendAutoSyncStatus(epochMs, message)
     }
 
     suspend fun updatePosition(
@@ -882,7 +986,11 @@ class PortfolioRepository(
     }
 
     suspend fun deletePosition(id: Long) {
-        val targetReal = portfolioDao.getPositionsByType(PortfolioType.REAL.name).firstOrNull { it.id == id }
+        val targetPos = portfolioDao.getPositionById(id)
+        if (targetPos != null) {
+            dividendHelper.recordPositionDeletionAudit(targetPos)
+        }
+        val targetReal = targetPos?.takeIf { it.portfolioType == PortfolioType.REAL.name }
         portfolioDao.deletePositionById(id)
         if (targetReal != null) {
             val stillExists = portfolioDao.getPositionsByType(PortfolioType.REAL.name)
