@@ -25,7 +25,7 @@ data class Ativo(
     val possuiCotacaoMercado: Boolean = false,
     val dataComDia: Int? = null,
     val dataExDia: Int? = null,
-    val ehCiclico: Boolean = true,
+    val ehCiclico: Boolean = false,
     val origemDados: String = "Local",
     val atualizadoEm: Long = System.currentTimeMillis()
 )

@@ -131,182 +131,208 @@ fun PremiumPortfolioAssetCard(
             .testTag("premium_asset_card_${pos.ticker}")
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // ==================== CABEÇALHO ====================
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            // ==================== CABEÇALHO (TICKER POR CIMA + GRÁFICO DE FUNDO) ====================
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(DarkPremiumCardSecondary.copy(alpha = 0.32f))
             ) {
-                // Lado esquerdo: Ícone da classe + Ticker clicável + Badge G1-G4 / Não cíclico + Classe
+                // Camada de fundo: gráfico sparkline de rentabilidade ao longo do cabeçalho
+                CompactReturnSparkline(
+                    points = indicators.sparklinePoints,
+                    lineColor = returnColor,
+                    modifier = Modifier
+                        .matchParentSize()
+                        .padding(start = 46.dp, top = 8.dp, bottom = 4.dp, end = 6.dp)
+                )
+
+                // Véu sutil à esquerda para garantir contraste máximo do ticker sobre o gráfico
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(
+                            Brush.horizontalGradient(
+                                0.0f to DarkPremiumCard.copy(alpha = 0.88f),
+                                0.42f to DarkPremiumCard.copy(alpha = 0.56f),
+                                0.72f to Color.Transparent,
+                                1.0f to DarkPremiumBg.copy(alpha = 0.52f)
+                            )
+                        )
+                )
+
+                // Camada superior: conteúdo interativo (Ícone + Ticker/Badge + Rentabilidade + Ações)
                 Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 6.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(46.dp)
-                            .clip(RoundedCornerShape(13.dp))
-                            .background(
-                                Brush.linearGradient(
-                                    listOf(
-                                        classAccent.copy(alpha = 0.28f),
-                                        DarkPremiumCardSecondary
+                    // Lado esquerdo: Ícone da classe + Ticker em destaque por cima + Badge G1-G4 / Não cíclico + Classe
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    Brush.linearGradient(
+                                        listOf(
+                                            classAccent.copy(alpha = 0.28f),
+                                            DarkPremiumCardSecondary
+                                        )
                                     )
                                 )
+                                .border(1.dp, classAccent.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
+                                .clickable(onClick = onClickTicker),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = classIcon,
+                                contentDescription = pos.assetClass.label,
+                                tint = classAccent,
+                                modifier = Modifier.size(24.dp)
                             )
-                            .border(1.dp, classAccent.copy(alpha = 0.55f), RoundedCornerShape(13.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = classIcon,
-                            contentDescription = pos.assetClass.label,
-                            tint = classAccent,
-                            modifier = Modifier.size(25.dp)
-                        )
+                        }
+
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .heightIn(min = 32.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable(onClick = onClickTicker)
+                                        .padding(end = 2.dp)
+                                        .testTag("asset_card_ticker_${pos.ticker}"),
+                                    contentAlignment = Alignment.CenterStart
+                                ) {
+                                    Text(
+                                        text = pos.ticker + if (pos.isDemo) " *" else "",
+                                        style = MaterialTheme.typography.titleLarge.copy(
+                                            fontSize = 20.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            letterSpacing = 0.4.sp
+                                        ),
+                                        color = PremiumTextPrimary,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                val groupBadge = if (pos.isCyclical) pos.dataComGroup else null
+                                if (groupBadge != null) {
+                                    Surface(
+                                        shape = RoundedCornerShape(999.dp),
+                                        color = TechBluePrimary.copy(alpha = 0.28f),
+                                        border = BorderStroke(1.dp, ConfirmedBlue.copy(alpha = 0.85f)),
+                                        modifier = Modifier.testTag("position_group_badge_${pos.ticker}")
+                                    ) {
+                                        Text(
+                                            text = groupBadge.code,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = ConfirmedBlue,
+                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = pos.assetClass.shortLabel.uppercase(Locale.ROOT),
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        letterSpacing = 1.2.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    ),
+                                    color = PremiumTextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.clickable(onClick = onClickTicker)
+                                )
+                            }
+                        }
                     }
 
+                    // Lado direito: Ações compactas em cima + Rentabilidade abaixo (sem roubar espaço do Ticker)
                     Column(
-                        modifier = Modifier.weight(1f)
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
-                            Box(
+                            IconButton(
+                                onClick = onOpenCadastroAndEdit,
                                 modifier = Modifier
-                                    .heightIn(min = 36.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable(onClick = onClickTicker)
-                                    .padding(end = 2.dp)
-                                    .testTag("asset_card_ticker_${pos.ticker}"),
-                                contentAlignment = Alignment.CenterStart
+                                    .size(36.dp)
+                                    .testTag("ticker_edit_button_${pos.ticker}")
                             ) {
-                                Text(
-                                    text = pos.ticker + if (pos.isDemo) " *" else "",
-                                    style = MaterialTheme.typography.titleLarge.copy(
-                                        fontWeight = FontWeight.ExtraBold,
-                                        letterSpacing = 0.4.sp
-                                    ),
-                                    color = PremiumTextPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = "Acessar cadastro e editar ${pos.ticker}",
+                                    tint = ConfirmedBlue,
+                                    modifier = Modifier.size(17.dp)
                                 )
                             }
-                            val groupBadge = if (pos.isCyclical) pos.dataComGroup else null
-                            if (groupBadge != null) {
-                                Surface(
-                                    shape = RoundedCornerShape(999.dp),
-                                    color = TechBluePrimary.copy(alpha = 0.22f),
-                                    border = BorderStroke(1.dp, ConfirmedBlue.copy(alpha = 0.8f)),
-                                    modifier = Modifier.testTag("position_group_badge_${pos.ticker}")
-                                ) {
-                                    Text(
-                                        text = groupBadge.code,
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = ConfirmedBlue,
-                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
-                                    )
-                                }
-                            } else {
-                                Surface(
-                                    shape = RoundedCornerShape(999.dp),
-                                    color = ConfirmedBlue.copy(alpha = 0.14f),
-                                    border = BorderStroke(1.dp, ConfirmedBlue.copy(alpha = 0.45f)),
-                                    modifier = Modifier.testTag("position_non_cyclical_badge_${pos.ticker}")
-                                ) {
-                                    Text(
-                                        text = "Não cíclico",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = ConfirmedBlue,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
+
+                            IconButton(
+                                onClick = onDelete,
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .testTag("delete_position_button_${pos.ticker}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.DeleteOutline,
+                                    contentDescription = "Remover ${pos.ticker}",
+                                    tint = PremiumTextSecondary,
+                                    modifier = Modifier.size(18.dp)
+                                )
                             }
                         }
 
-                        Text(
-                            text = pos.assetClass.shortLabel.uppercase(Locale.ROOT),
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                letterSpacing = 1.6.sp,
-                                fontWeight = FontWeight.Medium
-                            ),
-                            color = PremiumTextSecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.clickable(onClick = onClickTicker)
-                        )
-                    }
-                }
-
-                // Lado direito: Mini gráfico + Rentabilidade + Editar cadastro + Excluir
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    CompactReturnSparkline(
-                        points = indicators.sparklinePoints,
-                        lineColor = returnColor,
-                        modifier = Modifier
-                            .width(56.dp)
-                            .height(34.dp)
-                            .clickable(onClick = onClickTicker)
-                    )
-
-                    Column(
-                        horizontalAlignment = Alignment.End,
-                        modifier = Modifier
-                            .clickable(onClick = onClickTicker)
-                            .padding(horizontal = 2.dp)
-                    ) {
-                        Text(
-                            text = "Rentabilidade",
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                            color = PremiumTextSecondary,
-                            maxLines = 1
-                        )
-                        Text(
-                            text = if (pos.hasMarketPrice) {
-                                val arrow = if (isPositiveReturn) "▲ " else "▼ "
-                                arrow + formatPct(pos.profitLossPercent)
-                            } else {
-                                "Sem cotação"
-                            },
-                            style = MonoValueStyle.copy(
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
-                            ),
-                            color = returnColor,
-                            maxLines = 1
-                        )
-                    }
-
-                    IconButton(
-                        onClick = onOpenCadastroAndEdit,
-                        modifier = Modifier
-                            .size(40.dp)
-                            .testTag("ticker_edit_button_${pos.ticker}")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Edit,
-                            contentDescription = "Acessar cadastro e editar ${pos.ticker}",
-                            tint = ConfirmedBlue,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-
-                    IconButton(
-                        onClick = onDelete,
-                        modifier = Modifier
-                            .size(40.dp)
-                            .testTag("delete_position_button_${pos.ticker}")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.DeleteOutline,
-                            contentDescription = "Remover ${pos.ticker}",
-                            tint = PremiumTextSecondary,
-                            modifier = Modifier.size(19.dp)
-                        )
+                        Column(
+                            horizontalAlignment = Alignment.End,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable(onClick = onClickTicker)
+                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                        ) {
+                            Text(
+                                text = "Rentabilidade",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                                color = PremiumTextSecondary,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = if (pos.hasMarketPrice) {
+                                    val arrow = if (isPositiveReturn) "▲ " else "▼ "
+                                    arrow + formatPct(pos.profitLossPercent)
+                                } else {
+                                    "Sem cotação"
+                                },
+                                style = MonoValueStyle.copy(
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = returnColor,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
                     }
                 }
             }
@@ -315,7 +341,7 @@ fun PremiumPortfolioAssetCard(
             // Primeira linha: Preço Atual | Dividendos | Data Pagamento
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(7.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 val dayVarText = indicators.dayChangePercent?.let { ch ->
                     val prefix = if (ch >= 0.0) "+" else ""
@@ -377,7 +403,7 @@ fun PremiumPortfolioAssetCard(
             // Segunda linha: Quantidade | Preço Médio | Valor Atual
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(7.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 val formattedQty = if (pos.quantity % 1.0 == 0.0) {
                     String.format(Locale("pt", "BR"), "%.0f", pos.quantity)
@@ -457,25 +483,29 @@ private fun ClickableMetricTile(
             )
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 7.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
                     tint = iconTint,
-                    modifier = Modifier.size(13.dp)
+                    modifier = Modifier.size(12.dp)
                 )
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = 9.5.sp,
+                        letterSpacing = (-0.2).sp
+                    ),
                     color = PremiumTextSecondary,
                     maxLines = 1,
+                    softWrap = false,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
@@ -491,7 +521,8 @@ private fun ClickableMetricTile(
                 Text(
                     text = value,
                     style = MonoValueStyle.copy(
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
+                        letterSpacing = (-0.3).sp,
                         fontWeight = FontWeight.Bold
                     ),
                     color = PremiumTextPrimary,
@@ -504,7 +535,7 @@ private fun ClickableMetricTile(
                     imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                     contentDescription = "Abrir $title",
                     tint = ConfirmedBlue.copy(alpha = 0.78f),
-                    modifier = Modifier.size(14.dp)
+                    modifier = Modifier.size(12.dp)
                 )
             }
 
@@ -532,7 +563,7 @@ private fun CompactReturnSparkline(
         val minVal = points.minOrNull() ?: 0.0
         val maxVal = points.maxOrNull() ?: 1.0
         val range = (maxVal - minVal).takeIf { it > 0.0001 } ?: 1.0
-        val pad = 4f
+        val pad = 6f
         val usableW = (size.width - pad * 2f).coerceAtLeast(1f)
         val usableH = (size.height - pad * 2f).coerceAtLeast(1f)
         val stepX = usableW / (points.size - 1).toFloat()
@@ -561,24 +592,24 @@ private fun CompactReturnSparkline(
         drawPath(
             path = fillPath,
             brush = Brush.verticalGradient(
-                colors = listOf(lineColor.copy(alpha = 0.36f), Color.Transparent),
+                colors = listOf(lineColor.copy(alpha = 0.28f), Color.Transparent),
                 startY = pad,
                 endY = size.height
             )
         )
         drawPath(
             path = linePath,
-            color = lineColor,
-            style = Stroke(width = 2.4f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+            color = lineColor.copy(alpha = 0.72f),
+            style = Stroke(width = 2.6f, cap = StrokeCap.Round, join = StrokeJoin.Round)
         )
         // Ponto luminoso na extremidade direita
         drawCircle(
-            color = lineColor.copy(alpha = 0.45f),
-            radius = 5.5f,
+            color = lineColor.copy(alpha = 0.42f),
+            radius = 6f,
             center = lastOffset
         )
         drawCircle(
-            color = Color.White,
+            color = Color.White.copy(alpha = 0.9f),
             radius = 2.8f,
             center = lastOffset
         )

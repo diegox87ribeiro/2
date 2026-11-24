@@ -66,6 +66,22 @@ interface CarteiraLocalDao {
         atualizadoEm: Long = System.currentTimeMillis()
     ): Int
 
+    @Query(
+        """
+        UPDATE ativos
+        SET ehCiclico = :ehMensal,
+            dataComDia = CASE WHEN :ehMensal = 1 AND :dataComDia IS NOT NULL THEN :dataComDia ELSE dataComDia END,
+            atualizadoEm = :atualizadoEm
+        WHERE UPPER(ticker) = UPPER(:ticker)
+        """
+    )
+    suspend fun atualizarClassificacaoMensal(
+        ticker: String,
+        ehMensal: Boolean,
+        dataComDia: Int?,
+        atualizadoEm: Long = System.currentTimeMillis()
+    ): Int
+
     @Delete
     suspend fun deletarAtivo(ativo: Ativo)
 

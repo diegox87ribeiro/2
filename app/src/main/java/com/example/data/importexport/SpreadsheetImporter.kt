@@ -550,8 +550,8 @@ object SpreadsheetImporter {
                     parseDataComDay(row.getOrNull(dataComIdx))
                 } else null
                 val isCyclical = if (cyclicalIdx != -1) {
-                    parseCyclicalFlag(row.getOrNull(cyclicalIdx)) ?: true
-                } else true
+                    parseCyclicalFlag(row.getOrNull(cyclicalIdx)) ?: false
+                } else false
 
                 val candidate = PortfolioPositionEntity(
                     portfolioType = "REAL",

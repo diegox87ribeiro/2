@@ -416,7 +416,7 @@ fun AddPositionDialog(
     var curText by remember { mutableStateOf("") }
     var sector by remember { mutableStateOf("") }
     var dataComText by remember { mutableStateOf("") }
-    var isCyclical by remember { mutableStateOf(true) }
+    var isCyclical by remember { mutableStateOf(false) }
 
     val parsedDataCom = dataComText.trim().toIntOrNull()?.takeIf { it in 1..31 }
     val previewGroup = DataComGroup.fromDay(parsedDataCom, isCyclical)
@@ -461,9 +461,6 @@ fun AddPositionDialog(
                                 text = { Text(cls.label) },
                                 onClick = {
                                     selectedClass = cls
-                                    isCyclical = cls != AssetClass.ETF &&
-                                        cls != AssetClass.RENDA_FIXA &&
-                                        cls != AssetClass.CRIPTO
                                     expanded = false
                                 }
                             )
@@ -500,7 +497,7 @@ fun AddPositionDialog(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                        "Perfil de Ciclo (Grupo Data-Com)",
+                        "Classificação de Grupo (Dividendo Mensal)",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -509,22 +506,9 @@ fun AddPositionDialog(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         FilterChip(
-                            selected = isCyclical,
-                            onClick = { isCyclical = true },
-                            label = { Text("Cíclico (G1–G4)") },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = EmeraldContainer,
-                                selectedLabelColor = EmeraldPrimary
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .heightIn(min = 48.dp)
-                                .testTag("add_position_cyclical_yes")
-                        )
-                        FilterChip(
                             selected = !isCyclical,
                             onClick = { isCyclical = false },
-                            label = { Text("Não cíclico") },
+                            label = { Text("Sem grupo") },
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = ElectricCyan.copy(alpha = 0.18f),
                                 selectedLabelColor = ElectricCyan
@@ -534,12 +518,25 @@ fun AddPositionDialog(
                                 .heightIn(min = 48.dp)
                                 .testTag("add_position_cyclical_no")
                         )
+                        FilterChip(
+                            selected = isCyclical,
+                            onClick = { isCyclical = true },
+                            label = { Text("Mensal (G1–G4)") },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = EmeraldContainer,
+                                selectedLabelColor = EmeraldPrimary
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("add_position_cyclical_yes")
+                        )
                     }
                     Text(
                         text = when {
-                            !isCyclical -> "Ativo não cíclico: não receberá sigla de grupo G1, G2, G3 ou G4."
-                            previewGroup != null -> "Será marcado no Grupo ${previewGroup.code} (${previewGroup.label.substringAfter("• ")})."
-                            else -> "Ativo cíclico: classificado automaticamente em G1–G4 conforme o dia Data-Com."
+                            !isCyclical -> "Lançado sem classificação de grupo (G1–G4). Só será classificado se for identificado pagamento mensal de dividendos."
+                            previewGroup != null -> "Pagador mensal: será classificado no Grupo ${previewGroup.code} (${previewGroup.label.substringAfter("• ")})."
+                            else -> "Informe o dia Data-Com (1–31) ou atualize as cotações para vincular ao grupo G1–G4."
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = if (isCyclical) EmeraldPrimary else ElectricCyan,

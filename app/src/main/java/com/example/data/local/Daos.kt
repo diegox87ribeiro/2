@@ -55,7 +55,7 @@ interface PortfolioDao {
         dataComDay: Int?,
         dataSourceLabel: String,
         updatedAt: Long = System.currentTimeMillis(),
-        isCyclical: Boolean = true
+        isCyclical: Boolean = false
     )
 
     @Query(
@@ -84,6 +84,22 @@ interface PortfolioDao {
     suspend fun updateDataComIfMissingByTicker(
         ticker: String,
         dataComDay: Int,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE portfolio_positions
+        SET isCyclical = :isMonthlyPayer,
+            dataComDay = CASE WHEN :isMonthlyPayer = 1 AND :dataComDay IS NOT NULL THEN :dataComDay ELSE dataComDay END,
+            updatedAt = :updatedAt
+        WHERE UPPER(ticker) = UPPER(:ticker)
+        """
+    )
+    suspend fun updateMonthlyDividendClassificationByTicker(
+        ticker: String,
+        isMonthlyPayer: Boolean,
+        dataComDay: Int?,
         updatedAt: Long = System.currentTimeMillis()
     ): Int
 

@@ -592,11 +592,11 @@ fun AssetDetailScreen(
                             }
                             Spacer(Modifier.height(8.dp))
                             DetailMetricRow(
-                                "Regime de Recorrência",
+                                "Classificação de Grupo",
                                 if (position?.isCyclical == true && position.dataComGroup != null) {
-                                    "Cíclico • Grupo ${position.dataComGroup?.code}"
+                                    "Dividendo Mensal • Grupo ${position.dataComGroup?.code}"
                                 } else {
-                                    "Não cíclico"
+                                    "Sem classificação (não identificado como mensal)"
                                 },
                                 ConfirmedBlue
                             )
@@ -909,19 +909,6 @@ private fun AssetDetailHeaderCard(
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                                 color = ConfirmedBlue,
                                 modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
-                            )
-                        }
-                    } else {
-                        Surface(
-                            shape = RoundedCornerShape(999.dp),
-                            color = ConfirmedBlue.copy(alpha = 0.14f),
-                            border = BorderStroke(1.dp, ConfirmedBlue.copy(alpha = 0.45f))
-                        ) {
-                            Text(
-                                text = "Não cíclico",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = ConfirmedBlue,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
                     }

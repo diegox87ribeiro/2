@@ -1827,7 +1827,114 @@ class InvestAiCoreTests {
         assertEquals("Atual", equity.last().label)
         assertEquals(25.0 * 70.99, equity.last().marketValueBrl, 0.01)
     }
+
+    @Test
+    fun `assets launch without G1-G4 group and MonthlyDividendClassifier assigns group ONLY when monthly dividends are confirmed`() {
+        // 1) Lançamento padrão (entidade e importação CSV sem coluna Cíclico) nasce SEM classificação de grupo
+        val launchedEntity = com.example.data.local.PortfolioPositionEntity(
+            portfolioType = PortfolioType.REAL.name,
+            ticker = "PETR4",
+            name = "Petrobras PN",
+            assetClass = AssetClass.ACOES_BR.name,
+            quantity = 100.0,
+            averagePrice = 36.0,
+            currentPrice = 38.0,
+            hasMarketPrice = true,
+            sector = "Petróleo",
+            dataSourceLabel = "Manual"
+        )
+        assertFalse(launchedEntity.isCyclical)
+        assertEquals(null, DataComGroup.fromDay(launchedEntity.dataComDay, launchedEntity.isCyclical))
+
+        val csvWithoutCyclical = """
+            Ticker;Nome;Classe;Quantidade;Preço Médio;Preço Atual;Setor;Data-Com
+            PETR4;Petrobras PN;Ações BR;100;36,00;38,00;Petróleo;15
+            EGAF11;Ecoagro;FIAGRO;25;80,00;71,00;Fiagro;5
+        """.trimIndent()
+        val parsed = SpreadsheetImporter.parseCsv("sem_grupo.csv", csvWithoutCyclical)
+        assertEquals(2, parsed.positions.size)
+        assertTrue(parsed.positions.all { !it.isCyclical })
+
+        // 2) Pagador trimestral (4/12 meses) NÃO recebe grupo mesmo com dataComDay preenchido
+        val quarterlyQuote = com.example.domain.model.LiveMarketQuote(
+            ticker = "BBAS3",
+            companyName = "Banco do Brasil",
+            price = 28.50,
+            changePercent1d = 0.4,
+            dividendConsistencyMonths = 4,
+            dividendHistory6m = listOf(0.0, 0.45, 0.0, 0.0, 0.48, 0.0),
+            dataComDay = 30,
+            primarySourceLabel = "Brapi",
+            consultedSources = listOf("Brapi"),
+            fetchedAtMillis = 1_763_650_000_000L,
+            marketTimestampLabel = "24/11/2026",
+            b3PageUrl = "",
+            advfnPageUrl = ""
+        )
+        val quarterlyEval = com.example.domain.model.MonthlyDividendClassifier.evaluate(
+            ticker = "BBAS3",
+            liveQuote = quarterlyQuote
+        )
+        assertFalse(quarterlyEval.paysMonthlyDividends)
+        assertEquals(null, quarterlyEval.group)
+
+        // 3) Pagador mensal ao vivo (12/12 meses, Data-Com dia 5) recebe Grupo G1
+        val monthlyQuote = quarterlyQuote.copy(
+            ticker = "EGAF11",
+            companyName = "Ecoagro I Fiagro",
+            dividendConsistencyMonths = 12,
+            dividendHistory6m = listOf(0.80, 0.81, 0.82, 0.80, 0.82, 0.82),
+            dataComDay = 5
+        )
+        val monthlyEval = com.example.domain.model.MonthlyDividendClassifier.evaluate(
+            ticker = "EGAF11",
+            liveQuote = monthlyQuote
+        )
+        assertTrue(monthlyEval.paysMonthlyDividends)
+        assertEquals(5, monthlyEval.resolvedDataComDay)
+        assertEquals(DataComGroup.G1, monthlyEval.group)
+
+        // 4) Pagador mensal identificado pelo histórico real do usuário (3 meses consecutivos) -> Grupo G3 (dia 18)
+        val consecutiveEvents = listOf(
+            com.example.data.local.DividendEventEntity(
+                id = 1L, assetTicker = "XPML11", eventType = com.example.domain.model.DividendEventType.DIVIDENDO.name,
+                status = com.example.domain.model.DividendStatus.RECEIVED.name,
+                exDate = "18/09/2026", paymentDate = "25/09/2026", unitAmount = 0.92, quantityReference = 10.0, totalAmount = 9.20
+            ),
+            com.example.data.local.DividendEventEntity(
+                id = 2L, assetTicker = "XPML11", eventType = com.example.domain.model.DividendEventType.DIVIDENDO.name,
+                status = com.example.domain.model.DividendStatus.RECEIVED.name,
+                exDate = "18/10/2026", paymentDate = "25/10/2026", unitAmount = 0.92, quantityReference = 10.0, totalAmount = 9.20
+            ),
+            com.example.data.local.DividendEventEntity(
+                id = 3L, assetTicker = "XPML11", eventType = com.example.domain.model.DividendEventType.DIVIDENDO.name,
+                status = com.example.domain.model.DividendStatus.RECEIVED.name,
+                exDate = "18/11/2026", paymentDate = "25/11/2026", unitAmount = 0.92, quantityReference = 10.0, totalAmount = 9.20
+            )
+        )
+        val historyEval = com.example.domain.model.MonthlyDividendClassifier.evaluate(
+            ticker = "XPML11",
+            dividendEvents = consecutiveEvents
+        )
+        assertTrue(historyEval.paysMonthlyDividends)
+        assertEquals(18, historyEval.resolvedDataComDay)
+        assertEquals(DataComGroup.G3, historyEval.group)
+
+        // 5) Histórico trimestral do usuário (Mar, Jun, Set) NÃO classifica como mensal
+        val quarterlyUserEvents = listOf(
+            consecutiveEvents[0].copy(id = 4L, assetTicker = "TAEE11", exDate = "10/03/2026", paymentDate = "20/03/2026"),
+            consecutiveEvents[0].copy(id = 5L, assetTicker = "TAEE11", exDate = "10/06/2026", paymentDate = "20/06/2026"),
+            consecutiveEvents[0].copy(id = 6L, assetTicker = "TAEE11", exDate = "10/09/2026", paymentDate = "20/09/2026")
+        )
+        val quarterlyHistoryEval = com.example.domain.model.MonthlyDividendClassifier.evaluate(
+            ticker = "TAEE11",
+            dividendEvents = quarterlyUserEvents
+        )
+        assertFalse(quarterlyHistoryEval.paysMonthlyDividends)
+        assertEquals(null, quarterlyHistoryEval.group)
+    }
 }
+
 
 
 

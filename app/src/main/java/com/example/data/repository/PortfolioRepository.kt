@@ -295,19 +295,19 @@ class PortfolioRepository(
                 portfolioType = "REAL", ticker = "ITUB4", name = "Itaú Unibanco PN",
                 assetClass = AssetClass.ACOES_BR.name, quantity = 180.0, averagePrice = 31.50,
                 currentPrice = 35.80, hasMarketPrice = true, sector = "Bancos", dataComDay = 30,
-                dataSourceLabel = "Demonstração Fictícia", isDemo = true
+                isCyclical = true, dataSourceLabel = "Demonstração Fictícia", isDemo = true
             ),
             PortfolioPositionEntity(
                 portfolioType = "REAL", ticker = "HGLG11", name = "Pátria Logística FII",
                 assetClass = AssetClass.FII.name, quantity = 45.0, averagePrice = 158.00,
                 currentPrice = 156.40, hasMarketPrice = true, sector = "Logística", dataComDay = 30,
-                dataSourceLabel = "Demonstração Fictícia", isDemo = true
+                isCyclical = true, dataSourceLabel = "Demonstração Fictícia", isDemo = true
             ),
             PortfolioPositionEntity(
                 portfolioType = "REAL", ticker = "KNCA11", name = "Kinea Crédito Agro FIAGRO",
                 assetClass = AssetClass.FIAGRO.name, quantity = 60.0, averagePrice = 96.20,
                 currentPrice = 98.50, hasMarketPrice = true, sector = "CRAs High Grade", dataComDay = 30,
-                dataSourceLabel = "Demonstração Fictícia", isDemo = true
+                isCyclical = true, dataSourceLabel = "Demonstração Fictícia", isDemo = true
             ),
             PortfolioPositionEntity(
                 portfolioType = "REAL", ticker = "IVVB11", name = "iShares S&P 500 ETF",
@@ -358,7 +358,7 @@ class PortfolioRepository(
         currentPrice: Double?,
         sector: String,
         dataComDay: Int?,
-        isCyclical: Boolean = true
+        isCyclical: Boolean = false
     ) {
         val cleanTicker = ticker.trim().uppercase()
         val hasPrice = currentPrice != null && currentPrice > 0.0
@@ -372,7 +372,7 @@ class PortfolioRepository(
             currentPrice = currentPrice ?: 0.0,
             hasMarketPrice = hasPrice,
             sector = sector.ifBlank { assetClass.shortLabel },
-            dataComDay = dataComDay,
+            dataComDay = if (isCyclical) dataComDay else null,
             isCyclical = isCyclical,
             dataSourceLabel = "Registro Manual (${portfolioType.label})",
             isDemo = false
@@ -466,6 +466,7 @@ class PortfolioRepository(
                                 hasMarketPrice = true,
                                 sector = assetClass.shortLabel,
                                 dataComDay = null,
+                                isCyclical = false,
                                 dataSourceLabel = "ProfitChart (${exec.brokerAccount.ifBlank { "Execução" }})",
                                 isDemo = false
                             )
@@ -676,9 +677,6 @@ class PortfolioRepository(
                     OperationType.COMPRA -> {
                         if (existing == null) {
                             val assetClass = LiveQuoteParsers.inferAssetClassFromTicker(cleanTicker)
-                            val defaultCyclical = assetClass != AssetClass.ETF &&
-                                assetClass != AssetClass.RENDA_FIXA &&
-                                assetClass != AssetClass.CRIPTO
                             val inserted = PortfolioPositionEntity(
                                 portfolioType = portfolioType.name,
                                 ticker = cleanTicker,
@@ -690,7 +688,7 @@ class PortfolioRepository(
                                 hasMarketPrice = true,
                                 sector = assetClass.shortLabel,
                                 dataComDay = null,
-                                isCyclical = defaultCyclical,
+                                isCyclical = false,
                                 dataSourceLabel = sourceTag,
                                 isDemo = false
                             )
@@ -957,30 +955,54 @@ class PortfolioRepository(
         ticker: String,
         livePrice: Double,
         liveDataComDay: Int? = null,
-        liveDataExDay: Int? = null
+        liveDataExDay: Int? = null,
+        isMonthlyDividendPayer: Boolean? = null
     ): Int {
         if (livePrice <= 0.0) return 0
         val cleanTicker = ticker.trim().uppercase()
         val now = System.currentTimeMillis()
         carteiraLocalRepository.atualizarCotacao(cleanTicker, livePrice)
-        if (liveDataComDay != null || liveDataExDay != null) {
-            carteiraLocalDao.atualizarDatasDividendoSeAusente(
+        if (isMonthlyDividendPayer != null) {
+            val validDay = liveDataComDay?.takeIf { it in 1..31 }
+            applyMonthlyDividendClassification(
                 ticker = cleanTicker,
-                dataComDia = liveDataComDay?.takeIf { it in 1..31 },
-                dataExDia = liveDataExDay?.takeIf { it in 1..31 },
-                atualizadoEm = now
+                isMonthlyPayer = isMonthlyDividendPayer,
+                dataComDay = if (isMonthlyDividendPayer) validDay else null
             )
-        }
-        if (liveDataComDay != null && liveDataComDay in 1..31) {
-            portfolioDao.updateDataComIfMissingByTicker(
-                ticker = cleanTicker,
-                dataComDay = liveDataComDay,
-                updatedAt = now
-            )
+            if (isMonthlyDividendPayer && (validDay != null || liveDataExDay != null)) {
+                carteiraLocalDao.atualizarDatasDividendoSeAusente(
+                    ticker = cleanTicker,
+                    dataComDia = validDay,
+                    dataExDia = liveDataExDay?.takeIf { it in 1..31 },
+                    atualizadoEm = now
+                )
+            }
         }
         return portfolioDao.updateCurrentPriceByTicker(
             ticker = cleanTicker,
             currentPrice = livePrice,
+            updatedAt = now
+        )
+    }
+
+    suspend fun applyMonthlyDividendClassification(
+        ticker: String,
+        isMonthlyPayer: Boolean,
+        dataComDay: Int?
+    ): Int {
+        val cleanTicker = ticker.trim().uppercase()
+        val now = System.currentTimeMillis()
+        val validDay = if (isMonthlyPayer) dataComDay?.takeIf { it in 1..31 } else null
+        carteiraLocalDao.atualizarClassificacaoMensal(
+            ticker = cleanTicker,
+            ehMensal = isMonthlyPayer,
+            dataComDia = validDay,
+            atualizadoEm = now
+        )
+        return portfolioDao.updateMonthlyDividendClassificationByTicker(
+            ticker = cleanTicker,
+            isMonthlyPayer = isMonthlyPayer,
+            dataComDay = validDay,
             updatedAt = now
         )
     }

@@ -1750,7 +1750,63 @@ class ConsolidatedReportsRobolectricTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithText("Evolução Patrimonial • EGAF11").assertIsDisplayed()
     }
+
+    @Test
+    fun `PortfolioScreen hides G1-G4 badge for unclassified asset and shows ticker clearly on top`() {
+        val unclassifiedStock = com.example.domain.model.PortfolioItemView(
+            id = 95L,
+            portfolioType = com.example.domain.model.PortfolioType.REAL,
+            ticker = "BBAS3",
+            name = "Banco do Brasil",
+            assetClass = com.example.domain.model.AssetClass.ACOES_BR,
+            quantity = 50.0,
+            averagePrice = 27.65,
+            currentPrice = 28.44,
+            sector = "Bancos",
+            dataComDay = null,
+            dataSourceLabel = "Manual",
+            isDemo = false,
+            hasMarketPrice = true,
+            isCyclical = false
+        )
+        val state = com.example.ui.viewmodel.InvestDashboardState(
+            realPositions = listOf(unclassifiedStock),
+            realHhi = com.example.domain.model.HhiRiskReport.calculate(listOf(unclassifiedStock), 0.0)
+        )
+
+        composeRule.setContent {
+            InvestAiTheme {
+                com.example.ui.screens.PortfolioScreen(
+                    state = state,
+                    selectedType = com.example.domain.model.PortfolioType.REAL,
+                    importFeedback = null,
+                    pendingImportPreview = null,
+                    onSelectType = {},
+                    onImportUri = {},
+                    onConfirmPendingImport = {},
+                    onDismissPendingImport = {},
+                    onDismissImportFeedback = {},
+                    onBuildTemplateCsv = { "" },
+                    onBuildPortfolioCsv = { "" },
+                    onNotify = {},
+                    onLoadDemoReal = {},
+                    onClearPortfolio = {},
+                    onAddManualPosition = { _, _, _, _, _, _, _, _, _, _ -> },
+                    onRecordOperation = { _, _, _, _, _, _ -> },
+                    onDeletePosition = {},
+                    onUpdateCash = { _, _ -> }
+                )
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("portfolio_lazy_column")
+            .performScrollToNode(hasTestTag("premium_asset_card_BBAS3"))
+        composeRule.onNodeWithTag("asset_card_ticker_BBAS3").assertIsDisplayed()
+        composeRule.onNodeWithTag("position_group_badge_BBAS3").assertDoesNotExist()
+    }
 }
+
 
 
 

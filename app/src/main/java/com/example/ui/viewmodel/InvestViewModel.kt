@@ -50,6 +50,7 @@ import com.example.domain.model.InvestmentGoalType
 import com.example.domain.model.LiveMarketQuote
 import com.example.domain.model.LiveQuoteLookupState
 import com.example.domain.model.MarketAsset
+import com.example.domain.model.MonthlyDividendClassifier
 import com.example.domain.model.OperationType
 import com.example.domain.model.OrderScreenshotRecognitionState
 import com.example.domain.model.PortfolioItemView
@@ -481,7 +482,7 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         currentPrice: Double?,
         sector: String,
         dataComDay: Int?,
-        isCyclical: Boolean = true
+        isCyclical: Boolean = false
     ) {
         viewModelScope.launch {
             repository.addManualPosition(
@@ -496,7 +497,7 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                 dataComDay = dataComDay,
                 isCyclical = isCyclical
             )
-            _statusBannerMessage.value = "Posição ${ticker.uppercase()} registrada em ${portfolioType.label}."
+            _statusBannerMessage.value = "Posição ${ticker.uppercase()} registrada em ${portfolioType.label} (sem classificação de grupo até confirmar dividendo mensal)."
         }
     }
 
@@ -511,6 +512,9 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
     ) {
         viewModelScope.launch {
             repository.recordOperation(portfolioType, ticker, operationType, quantity, unitPrice, notes, dateIso)
+            if (operationType == OperationType.PROVENTO) {
+                reclassifyMonthlyGroupForTicker(ticker)
+            }
             val dateSuffix = dateIso?.trim()?.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
             _statusBannerMessage.value = "Operação ${operationType.label} de ${ticker.trim().uppercase()} registrada$dateSuffix."
         }
@@ -695,6 +699,7 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                 _liveQuotesByTicker.value = _liveQuotesByTicker.value + (quote.ticker to quote)
                 _liveLookupState.value = LiveQuoteLookupState.Success(quote)
                 withContext(Dispatchers.IO) { repository.saveCachedLiveQuote(quote) }
+                reclassifyMonthlyGroupForTicker(quote.ticker, liveQuoteOverride = quote)
                 evaluateLiveQuotesAgainstAlerts(mapOf(quote.ticker.uppercase() to quote), notifyIfNoneTriggered = false)
             }.onFailure { err ->
                 _liveLookupState.value = LiveQuoteLookupState.Error(
@@ -736,16 +741,19 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         val clean = LiveQuoteParsers.normalizeTicker(ticker)
         val live = dashboardState.value.liveQuotesByTicker[clean] ?: _liveQuotesByTicker.value[clean] ?: return
         viewModelScope.launch {
+            val eval = evaluateMonthlyDividendForTicker(clean, live)
             val updatedCount = withContext(Dispatchers.IO) {
                 repository.applyLivePriceToPortfolio(
                     ticker = clean,
                     livePrice = live.price,
-                    liveDataComDay = live.dataComDay,
-                    liveDataExDay = live.dataExDay
+                    liveDataComDay = eval.resolvedDataComDay,
+                    liveDataExDay = live.dataExDay,
+                    isMonthlyDividendPayer = eval.paysMonthlyDividends
                 )
             }
             _statusBannerMessage.value = if (updatedCount > 0) {
-                "Cotação ao vivo de $clean aplicada na Carteira."
+                val grpSuffix = eval.group?.let { " • Pagador mensal (${it.code})" } ?: " • Sem grupo mensal"
+                "Cotação ao vivo de $clean aplicada na Carteira$grpSuffix."
             } else {
                 "$clean não encontrado na Carteira salva."
             }
@@ -771,19 +779,30 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                 if (fetched.isNotEmpty()) {
                     _liveQuotesByTicker.value = _liveQuotesByTicker.value + fetched
                     var appliedPositions = 0
+                    var monthlyClassifiedCount = 0
                     withContext(Dispatchers.IO) {
                         repository.saveCachedLiveQuotes(fetched.values)
                         fetched.forEach { (ticker, quote) ->
+                            val eval = evaluateMonthlyDividendForTicker(ticker, quote)
+                            if (eval.paysMonthlyDividends && eval.group != null) {
+                                monthlyClassifiedCount++
+                            }
                             appliedPositions += repository.applyLivePriceToPortfolio(
                                 ticker = ticker,
                                 livePrice = quote.price,
-                                liveDataComDay = quote.dataComDay,
-                                liveDataExDay = quote.dataExDay
+                                liveDataComDay = eval.resolvedDataComDay,
+                                liveDataExDay = quote.dataExDay,
+                                isMonthlyDividendPayer = eval.paysMonthlyDividends
                             )
                         }
                     }
                     evaluateLiveQuotesAgainstAlerts(fetched, notifyIfNoneTriggered = false)
-                    _statusBannerMessage.value = "${fetched.size} ativo(s) consultado(s) ao vivo e $appliedPositions posição(ões) atualizada(s)."
+                    val monthlyTxt = if (monthlyClassifiedCount > 0) {
+                        " • $monthlyClassifiedCount pagador(es) mensal(is) classificado(s) (G1–G4)"
+                    } else {
+                        ""
+                    }
+                    _statusBannerMessage.value = "${fetched.size} ativo(s) consultado(s) ao vivo e $appliedPositions posição(ões) atualizada(s)$monthlyTxt."
                 } else {
                     _statusBannerMessage.value = "Nenhuma cotação ao vivo pôde ser obtida. Dados locais preservados no Room."
                 }
@@ -1691,6 +1710,7 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
             }.onSuccess {
+                reclassifyMonthlyGroupForTicker(ticker)
                 val action = if (id != null && id > 0L) "atualizado" else "cadastrado"
                 _statusBannerMessage.value = "Provento de ${ticker.trim().uppercase()} (${status.label}) $action com sucesso."
             }.onFailure { err ->
@@ -1871,7 +1891,21 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             val result = withContext(Dispatchers.IO) {
-                repository.syncConfirmedDividendsFromQuotes(realPositions, freshQuotes)
+                val syncRes = repository.syncConfirmedDividendsFromQuotes(realPositions, freshQuotes)
+                // Reclassifica estritamente os grupos G1–G4 apenas para ativos identificados como pagadores mensais
+                realPositions.forEach { pos ->
+                    val tkr = pos.ticker.trim().uppercase()
+                    val quote = freshQuotes[tkr]
+                    val eval = evaluateMonthlyDividendForTicker(tkr, quote)
+                    if (quote != null || eval.paysMonthlyDividends) {
+                        repository.applyMonthlyDividendClassification(
+                            ticker = tkr,
+                            isMonthlyPayer = eval.paysMonthlyDividends,
+                            dataComDay = eval.resolvedDataComDay
+                        )
+                    }
+                }
+                syncRes
             }
             val timeFmt = java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale("pt", "BR")).format(java.util.Date(now))
             val summary = buildString {
@@ -1900,6 +1934,46 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
             }
         } finally {
             _isSyncingDividends.value = false
+        }
+    }
+
+    private fun evaluateMonthlyDividendForTicker(
+        rawTicker: String,
+        liveQuoteOverride: LiveMarketQuote? = null
+    ): com.example.domain.model.MonthlyDividendEvaluation {
+        val clean = rawTicker.trim().uppercase()
+        val stateSnap = dashboardState.value
+        val existingPos = stateSnap.realPositions.firstOrNull { it.ticker.equals(clean, ignoreCase = true) }
+            ?: stateSnap.simPositions.firstOrNull { it.ticker.equals(clean, ignoreCase = true) }
+        val quote = liveQuoteOverride ?: stateSnap.liveQuotesByTicker[clean] ?: _liveQuotesByTicker.value[clean]
+        return MonthlyDividendClassifier.evaluate(
+            ticker = clean,
+            liveQuote = quote,
+            dividendEvents = stateSnap.dividendEvents,
+            operations = stateSnap.operations,
+            existingDataComDay = existingPos?.dataComDay
+        )
+    }
+
+    private suspend fun reclassifyMonthlyGroupForTicker(
+        rawTicker: String,
+        liveQuoteOverride: LiveMarketQuote? = null
+    ) {
+        val clean = rawTicker.trim().uppercase()
+        if (clean.isBlank()) return
+        val stateSnap = dashboardState.value
+        val hasPosition = stateSnap.realPositions.any { it.ticker.equals(clean, ignoreCase = true) } ||
+            stateSnap.simPositions.any { it.ticker.equals(clean, ignoreCase = true) }
+        if (!hasPosition) return
+        val eval = evaluateMonthlyDividendForTicker(clean, liveQuoteOverride)
+        if (liveQuoteOverride != null || eval.paysMonthlyDividends) {
+            withContext(Dispatchers.IO) {
+                repository.applyMonthlyDividendClassification(
+                    ticker = clean,
+                    isMonthlyPayer = eval.paysMonthlyDividends,
+                    dataComDay = eval.resolvedDataComDay
+                )
+            }
         }
     }
 }
