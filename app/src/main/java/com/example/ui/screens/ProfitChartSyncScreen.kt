@@ -1,7 +1,10 @@
 package com.example.ui.screens
 
+import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import com.example.data.repository.OrderScreenshotRecognizer
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -85,6 +88,7 @@ fun ProfitChartSyncScreen(
     onConfirmScreenshotOrders: (PortfolioType, List<RecognizedOrderDraft>, Boolean) -> Unit = { _, _, _ -> },
     onDismissScreenshotReview: () -> Unit = {}
 ) {
+    val context = LocalContext.current
     val prefs = state.preferences
     var endpointUrl by remember(prefs.profitEndpointUrl) { mutableStateOf(prefs.profitEndpointUrl) }
     var authToken by remember(prefs.profitAuthToken) { mutableStateOf(prefs.profitAuthToken) }
@@ -104,6 +108,12 @@ fun ProfitChartSyncScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
             onRecognizeOrderScreenshot(uri)
         }
     }
@@ -394,7 +404,7 @@ fun ProfitChartSyncScreen(
                 Button(
                     onClick = {
                         orderDocumentPicker.launch(
-                            arrayOf("application/pdf", "image/*")
+                            OrderScreenshotRecognizer.PICKER_MIME_TYPES
                         )
                     },
                     enabled = orderScreenshotState !is OrderScreenshotRecognitionState.Analyzing,
@@ -520,7 +530,7 @@ fun ProfitChartSyncScreen(
             onDismiss = onDismissScreenshotReview,
             onPickAnotherImage = {
                 orderDocumentPicker.launch(
-                    arrayOf("application/pdf", "image/*")
+                    OrderScreenshotRecognizer.PICKER_MIME_TYPES
                 )
             },
             onConfirmLaunch = { orders, applyPositions ->

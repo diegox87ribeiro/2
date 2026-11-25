@@ -1248,16 +1248,21 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         viewModelScope.launch {
-            val isPdf = withContext(Dispatchers.IO) { orderScreenshotRecognizer.isPdfUri(uri) }
+            var isPdf = false
             _orderScreenshotState.value = OrderScreenshotRecognitionState.Analyzing(
-                statusLabel = if (isPdf) {
-                    "Lendo Nota de Corretagem (PDF) com Gemini..."
-                } else {
-                    "Analisando print de ordens com Gemini..."
-                }
+                statusLabel = "Abrindo arquivo selecionado..."
             )
             try {
-                val result = orderScreenshotRecognizer.recognizeFromUri(uri)
+                val loadedDocument = orderScreenshotRecognizer.loadDocumentFromUri(uri)
+                isPdf = loadedDocument.isPdf
+                _orderScreenshotState.value = OrderScreenshotRecognitionState.Analyzing(
+                    statusLabel = if (isPdf) {
+                        "Lendo Nota de Corretagem (PDF) com Gemini..."
+                    } else {
+                        "Analisando print de ordens com Gemini..."
+                    }
+                )
+                val result = orderScreenshotRecognizer.recognizeLoadedDocument(loadedDocument)
                 if (result.orders.isEmpty()) {
                     val hint = result.warnings.firstOrNull()
                         ?: if (isPdf) {
@@ -1295,7 +1300,7 @@ class InvestViewModel(application: Application) : AndroidViewModel(application) 
                         if (isPdf) {
                             "Não foi possível interpretar a Nota de Corretagem PDF selecionada. Verifique se o PDF não está protegido por senha."
                         } else {
-                            "Não foi possível ler as ordens do arquivo selecionado. Tente novamente com um PDF de Nota de Corretagem ou print nítido (PNG/JPG)."
+                            "Não foi possível ler as ordens do arquivo selecionado. Tente novamente com um PDF de Nota de Corretagem ou print nítido (PNG/JPG/WEBP/HEIC)."
                         }
                     ),
                     lastImageUriString = uri.toString()

@@ -1805,6 +1805,39 @@ class ConsolidatedReportsRobolectricTest {
         composeRule.onNodeWithTag("asset_card_ticker_BBAS3").assertIsDisplayed()
         composeRule.onNodeWithTag("position_group_badge_BBAS3").assertDoesNotExist()
     }
+
+    @Test
+    fun `OrderScreenshotRecognizer loadDocumentFromUri reads content URI once and opens BOM PDF and HEIC image`() = kotlinx.coroutines.runBlocking {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.app.Application>()
+        val recognizer = com.example.data.repository.OrderScreenshotRecognizer(context)
+
+        // 1) PDF com BOM e URI opaca sem extensão .pdf (semelhante a Samsung My Files / Downloads)
+        val pdfUri = android.net.Uri.parse("content://com.example.test.docs/document/9901")
+        val pdfBytes = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()) +
+            "%PDF-1.5\nNota de Corretagem SINACOR\n%%EOF".toByteArray(Charsets.US_ASCII)
+        org.robolectric.Shadows.shadowOf(context.contentResolver)
+            .registerInputStream(pdfUri, java.io.ByteArrayInputStream(pdfBytes))
+
+        val loadedPdf = recognizer.loadDocumentFromUri(pdfUri)
+        org.junit.Assert.assertTrue(loadedPdf.isPdf)
+        org.junit.Assert.assertEquals("application/pdf", loadedPdf.mimeType)
+        org.junit.Assert.assertEquals(pdfBytes.size, loadedPdf.bytes.size)
+
+        // 2) Imagem HEIC via content URI sem extensão
+        val heicUri = android.net.Uri.parse("content://com.example.test.docs/media/8802")
+        val heicBytes = byteArrayOf(
+            0x00, 0x00, 0x00, 0x18,
+            'f'.code.toByte(), 't'.code.toByte(), 'y'.code.toByte(), 'p'.code.toByte(),
+            'h'.code.toByte(), 'e'.code.toByte(), 'i'.code.toByte(), 'c'.code.toByte(),
+            0x00, 0x00, 0x00, 0x00
+        )
+        org.robolectric.Shadows.shadowOf(context.contentResolver)
+            .registerInputStream(heicUri, java.io.ByteArrayInputStream(heicBytes))
+
+        val loadedImg = recognizer.loadDocumentFromUri(heicUri)
+        org.junit.Assert.assertEquals(com.example.data.repository.BrokerageDocumentKind.IMAGE, loadedImg.kind)
+        org.junit.Assert.assertEquals("image/heic", loadedImg.mimeType)
+    }
 }
 
 

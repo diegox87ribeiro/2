@@ -1933,6 +1933,58 @@ class InvestAiCoreTests {
         assertFalse(quarterlyHistoryEval.paysMonthlyDividends)
         assertEquals(null, quarterlyHistoryEval.group)
     }
+
+    @Test
+    fun `OrderScreenshotRecognizer detects PDF with BOM or octet-stream MIME, modern image formats, and rejects spreadsheets`() {
+        // 1) PDF padrão sem extensão e com MIME genérico application/octet-stream
+        val rawPdf = "%PDF-1.7\n1 0 obj\n<<>>\nendobj\n".toByteArray(Charsets.US_ASCII)
+        val (pdfKind, pdfMime) = com.example.data.repository.OrderScreenshotRecognizer.detectDocumentKindAndMime(
+            bytes = rawPdf,
+            displayName = "document:1000421",
+            resolverMime = "application/octet-stream"
+        )
+        assertEquals(com.example.data.repository.BrokerageDocumentKind.PDF, pdfKind)
+        assertEquals("application/pdf", pdfMime)
+
+        // 2) PDF precedido de UTF-8 BOM + espaços (válido segundo ISO 32000 nos primeiros 1024 bytes)
+        val bomPdf = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte(), ' '.code.toByte(), '\n'.code.toByte()) + rawPdf
+        assertTrue(com.example.data.repository.OrderScreenshotRecognizer.containsPdfHeader(bomPdf))
+        val (bomKind, _) = com.example.data.repository.OrderScreenshotRecognizer.detectDocumentKindAndMime(
+            bytes = bomPdf,
+            displayName = "NotaCorretagem_01-11-26.PDF",
+            resolverMime = ""
+        )
+        assertEquals(com.example.data.repository.BrokerageDocumentKind.PDF, bomKind)
+
+        // 3) Imagem HEIC (comum em aparelhos Samsung Galaxy) detectada pelos magic bytes ftypheic
+        val heicHeader = byteArrayOf(
+            0x00, 0x00, 0x00, 0x18,
+            'f'.code.toByte(), 't'.code.toByte(), 'y'.code.toByte(), 'p'.code.toByte(),
+            'h'.code.toByte(), 'e'.code.toByte(), 'i'.code.toByte(), 'c'.code.toByte()
+        )
+        val (heicKind, heicMime) = com.example.data.repository.OrderScreenshotRecognizer.detectDocumentKindAndMime(
+            bytes = heicHeader,
+            displayName = "IMG_20261124.heic",
+            resolverMime = "application/octet-stream"
+        )
+        assertEquals(com.example.data.repository.BrokerageDocumentKind.IMAGE, heicKind)
+        assertEquals("image/heic", heicMime)
+
+        // 4) Imagem PNG / JPEG / WebP detectadas pelos magic bytes
+        val pngHeader = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00)
+        assertEquals("image/png", com.example.data.repository.OrderScreenshotRecognizer.detectImageMimeFromBytes(pngHeader))
+        val jpgHeader = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0xE0.toByte())
+        assertEquals("image/jpeg", com.example.data.repository.OrderScreenshotRecognizer.detectImageMimeFromBytes(jpgHeader))
+
+        // 5) Planilha CSV rejeitada com segurança (sem cair no decoder de imagem)
+        val csvBytes = "Ticker,Quantidade,PrecoMedio\nPETR4,100,35.50\n".toByteArray(Charsets.UTF_8)
+        val (csvKind, _) = com.example.data.repository.OrderScreenshotRecognizer.detectDocumentKindAndMime(
+            bytes = csvBytes,
+            displayName = "carteira.csv",
+            resolverMime = "text/csv"
+        )
+        assertEquals(com.example.data.repository.BrokerageDocumentKind.UNSUPPORTED, csvKind)
+    }
 }
 
 

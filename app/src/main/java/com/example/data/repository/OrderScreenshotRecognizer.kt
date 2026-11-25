@@ -3,7 +3,10 @@ package com.example.data.repository
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.net.Uri
+import android.os.Build
+import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import android.util.Log
 import com.example.domain.model.OrderScreenshotJsonParser
@@ -19,6 +22,23 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.nio.ByteBuffer
+
+enum class BrokerageDocumentKind {
+    PDF,
+    IMAGE,
+    UNSUPPORTED
+}
+
+data class LoadedBrokerageDocument(
+    val bytes: ByteArray,
+    val displayName: String,
+    val mimeType: String,
+    val kind: BrokerageDocumentKind
+) {
+    val isPdf: Boolean get() = kind == BrokerageDocumentKind.PDF
+}
 
 /**
  * Reconhecedor multimodal de Notas de Corretagem em PDF (SINACOR B3 RV Listado e BM&F Futuros)
@@ -30,9 +50,172 @@ class OrderScreenshotRecognizer(
 ) {
     companion object {
         private const val TAG = "OrderNoteRecognizer"
-        private const val MAX_PDF_INLINE_BYTES = 18 * 1024 * 1024 // Limite seguro (< 20 MB Firebase AI Logic)
+        private const val MAX_INLINE_BYTES = 18 * 1024 * 1024 // Limite seguro (< 20 MB Firebase AI Logic)
+        private const val MAX_READ_BYTES = 35 * 1024 * 1024   // Permite ler fotos em alta resolução antes de redimensionar
         private const val IMAGE_TIMEOUT_MS = 60_000L
         private const val PDF_TIMEOUT_MS = 120_000L
+        private const val PDF_HEADER_SCAN_LIMIT = 1024
+
+        val PICKER_MIME_TYPES: Array<String> = arrayOf(
+            "application/pdf",
+            "application/x-pdf",
+            "image/*",
+            "application/octet-stream"
+        )
+
+        private val GEMINI_DIRECT_IMAGE_MIMES = setOf(
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "image/heic",
+            "image/heif",
+            "image/gif"
+        )
+
+        /**
+         * Verifica a assinatura `%PDF` nos primeiros 1024 bytes (padrão ISO 32000),
+         * tolerando UTF-8 BOM ou espaços/bytes iniciais antes do cabeçalho PDF.
+         */
+        fun containsPdfHeader(bytes: ByteArray): Boolean {
+            if (bytes.size < 4) return false
+            val limit = minOf(bytes.size - 4, PDF_HEADER_SCAN_LIMIT)
+            for (i in 0..limit) {
+                if (
+                    bytes[i] == '%'.code.toByte() &&
+                    bytes[i + 1] == 'P'.code.toByte() &&
+                    bytes[i + 2] == 'D'.code.toByte() &&
+                    bytes[i + 3] == 'F'.code.toByte()
+                ) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        /**
+         * Detecta o MIME de imagem pelos magic bytes do arquivo (JPEG, PNG, WebP, GIF, BMP, HEIC/HEIF/AVIF).
+         */
+        fun detectImageMimeFromBytes(bytes: ByteArray): String? {
+            if (bytes.size < 4) return null
+            val b0 = bytes[0].toInt() and 0xFF
+            val b1 = bytes[1].toInt() and 0xFF
+            val b2 = bytes[2].toInt() and 0xFF
+            val b3 = bytes[3].toInt() and 0xFF
+
+            // JPEG: FF D8 FF
+            if (b0 == 0xFF && b1 == 0xD8 && b2 == 0xFF) return "image/jpeg"
+
+            // PNG: 89 50 4E 47 0D 0A 1A 0A
+            if (
+                bytes.size >= 8 &&
+                b0 == 0x89 && b1 == 0x50 && b2 == 0x4E && b3 == 0x47 &&
+                (bytes[4].toInt() and 0xFF) == 0x0D &&
+                (bytes[5].toInt() and 0xFF) == 0x0A &&
+                (bytes[6].toInt() and 0xFF) == 0x1A &&
+                (bytes[7].toInt() and 0xFF) == 0x0A
+            ) {
+                return "image/png"
+            }
+
+            // WebP: RIFF....WEBP
+            if (
+                bytes.size >= 12 &&
+                b0 == 'R'.code && b1 == 'I'.code && b2 == 'F'.code && b3 == 'F'.code &&
+                bytes[8] == 'W'.code.toByte() &&
+                bytes[9] == 'E'.code.toByte() &&
+                bytes[10] == 'B'.code.toByte() &&
+                bytes[11] == 'P'.code.toByte()
+            ) {
+                return "image/webp"
+            }
+
+            // GIF: GIF87a / GIF89a
+            if (
+                bytes.size >= 6 &&
+                b0 == 'G'.code && b1 == 'I'.code && b2 == 'F'.code && b3 == '8'.code
+            ) {
+                return "image/gif"
+            }
+
+            // BMP: 42 4D
+            if (b0 == 'B'.code && b1 == 'M'.code) return "image/bmp"
+
+            // ISO BMFF (HEIC / HEIF / AVIF): offset 4 == "ftyp"
+            if (
+                bytes.size >= 12 &&
+                bytes[4] == 'f'.code.toByte() &&
+                bytes[5] == 't'.code.toByte() &&
+                bytes[6] == 'y'.code.toByte() &&
+                bytes[7] == 'p'.code.toByte()
+            ) {
+                val brand = String(bytes, 8, 4, Charsets.US_ASCII).lowercase()
+                return when {
+                    brand in setOf("heic", "heix", "hevc", "hevx") -> "image/heic"
+                    brand in setOf("mif1", "msf1", "heif") -> "image/heif"
+                    brand in setOf("avif", "avis") -> "image/avif"
+                    else -> null
+                }
+            }
+
+            return null
+        }
+
+        /**
+         * Classifica o arquivo carregado priorizando assinatura binária (magic bytes),
+         * com fallback seguro para MIME/extensão.
+         */
+        fun detectDocumentKindAndMime(
+            bytes: ByteArray,
+            displayName: String,
+            resolverMime: String
+        ): Pair<BrokerageDocumentKind, String> {
+            // 1. Assinatura PDF nos primeiros 1024 bytes (independe de MIME ou extensão .PDF)
+            if (containsPdfHeader(bytes)) {
+                return BrokerageDocumentKind.PDF to "application/pdf"
+            }
+
+            // 2. Assinatura binária de imagem (PNG, JPG, WebP, HEIC, HEIF, AVIF, GIF, BMP)
+            val magicImageMime = detectImageMimeFromBytes(bytes)
+            if (magicImageMime != null) {
+                return BrokerageDocumentKind.IMAGE to magicImageMime
+            }
+
+            // 3. Rejeita explicitamente arquivos comuns de planilha/ZIP/HTML que não são PDF nem imagem
+            val lowerName = displayName.lowercase()
+            val lowerMime = resolverMime.lowercase()
+            if (
+                lowerName.endsWith(".csv") ||
+                lowerName.endsWith(".xlsx") ||
+                lowerName.endsWith(".xls") ||
+                lowerName.endsWith(".txt") ||
+                lowerName.endsWith(".zip") ||
+                lowerMime.contains("spreadsheet") ||
+                lowerMime.contains("excel") ||
+                lowerMime.contains("csv")
+            ) {
+                return BrokerageDocumentKind.UNSUPPORTED to resolverMime.ifBlank { "application/octet-stream" }
+            }
+
+            // 4. Fallback por MIME/extensão de imagem (caso formato raro decodificável pelo Android)
+            if (lowerMime.startsWith("image/")) {
+                return BrokerageDocumentKind.IMAGE to lowerMime
+            }
+            val extImageMime = when {
+                lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg") -> "image/jpeg"
+                lowerName.endsWith(".png") -> "image/png"
+                lowerName.endsWith(".webp") -> "image/webp"
+                lowerName.endsWith(".heic") -> "image/heic"
+                lowerName.endsWith(".heif") -> "image/heif"
+                lowerName.endsWith(".gif") -> "image/gif"
+                lowerName.endsWith(".bmp") -> "image/bmp"
+                else -> null
+            }
+            if (extImageMime != null) {
+                return BrokerageDocumentKind.IMAGE to extImageMime
+            }
+
+            return BrokerageDocumentKind.UNSUPPORTED to resolverMime.ifBlank { "application/octet-stream" }
+        }
     }
 
     private val responseSchema = Schema.obj(
@@ -166,29 +349,73 @@ class OrderScreenshotRecognizer(
         if (displayName.endsWith(".pdf", ignoreCase = true)) return true
 
         return runCatching {
-            context.contentResolver.openInputStream(uri)?.use { stream ->
-                val header = ByteArray(5)
-                val read = stream.read(header)
-                read >= 4 &&
-                    header[0] == '%'.code.toByte() &&
-                    header[1] == 'P'.code.toByte() &&
-                    header[2] == 'D'.code.toByte() &&
-                    header[3] == 'F'.code.toByte()
+            openUriInputStream(uri)?.use { stream ->
+                val header = readPrefixBytes(stream, PDF_HEADER_SCAN_LIMIT + 4)
+                containsPdfHeader(header)
             } ?: false
         }.getOrDefault(false)
     }
 
-    suspend fun recognizeFromUri(uri: Uri): OrderScreenshotRecognitionResult = withContext(Dispatchers.IO) {
-        if (isPdfUri(uri)) {
-            recognizeBrokeragePdf(uri)
-        } else {
-            recognizeOrderImage(uri)
+    /**
+     * Lê o arquivo da `Uri` uma única vez (com fallbacks para provedores SAF, Samsung My Files,
+     * Galeria e arquivos virtuais da nuvem) e classifica PDF vs. Imagem pelos bytes reais.
+     */
+    suspend fun loadDocumentFromUri(uri: Uri): LoadedBrokerageDocument = withContext(Dispatchers.IO) {
+        val displayName = resolveDisplayName(uri)
+        val resolverMime = runCatching { context.contentResolver.getType(uri) }.getOrNull().orEmpty()
+        val bytes = readBytesOnce(uri, MAX_READ_BYTES)
+        val (kind, resolvedMime) = detectDocumentKindAndMime(
+            bytes = bytes,
+            displayName = displayName,
+            resolverMime = resolverMime
+        )
+        if (kind == BrokerageDocumentKind.UNSUPPORTED) {
+            val fileLabel = displayName.ifBlank { "selecionado" }
+            val lower = fileLabel.lowercase()
+            val spreadsheetHint = if (
+                lower.endsWith(".csv") || lower.endsWith(".xlsx") || lower.endsWith(".xls")
+            ) {
+                " Para planilhas CSV/XLSX, use o botão \"Importar XLSX/CSV\"."
+            } else {
+                ""
+            }
+            throw IllegalStateException(
+                "O arquivo \"$fileLabel\" não foi reconhecido como Nota de Corretagem PDF nem imagem válida (PNG, JPG, WEBP ou HEIC).$spreadsheetHint"
+            )
         }
+        LoadedBrokerageDocument(
+            bytes = bytes,
+            displayName = displayName.ifBlank { if (kind == BrokerageDocumentKind.PDF) "nota_corretagem.pdf" else "print_ordens" },
+            mimeType = resolvedMime,
+            kind = kind
+        )
     }
 
-    private suspend fun recognizeBrokeragePdf(uri: Uri): OrderScreenshotRecognitionResult {
-        val pdfBytes = readBytesWithinLimit(uri, MAX_PDF_INLINE_BYTES)
-        val fileName = resolveDisplayName(uri).ifBlank { "nota_corretagem.pdf" }
+    suspend fun recognizeFromUri(uri: Uri): OrderScreenshotRecognitionResult = withContext(Dispatchers.IO) {
+        val loaded = loadDocumentFromUri(uri)
+        recognizeLoadedDocument(loaded)
+    }
+
+    suspend fun recognizeLoadedDocument(document: LoadedBrokerageDocument): OrderScreenshotRecognitionResult =
+        withContext(Dispatchers.IO) {
+            when (document.kind) {
+                BrokerageDocumentKind.PDF -> recognizeBrokeragePdfBytes(document.bytes, document.displayName)
+                BrokerageDocumentKind.IMAGE -> recognizeOrderImageBytes(document.bytes, document.mimeType, document.displayName)
+                BrokerageDocumentKind.UNSUPPORTED -> throw IllegalStateException(
+                    "Formato de arquivo não suportado. Escolha uma Nota de Corretagem em PDF ou um print válido (PNG/JPG/WEBP/HEIC)."
+                )
+            }
+        }
+
+    private suspend fun recognizeBrokeragePdfBytes(
+        pdfBytes: ByteArray,
+        fileName: String
+    ): OrderScreenshotRecognitionResult {
+        if (pdfBytes.size > MAX_INLINE_BYTES) {
+            throw IllegalStateException(
+                "O PDF selecionado (${pdfBytes.size / (1024 * 1024)} MB) excede o limite de 18 MB suportado para leitura direta pela IA. Divida o arquivo por período e tente novamente."
+            )
+        }
 
         return try {
             val prompt = content {
@@ -237,33 +464,47 @@ class OrderScreenshotRecognizer(
         }
     }
 
-    private suspend fun recognizeOrderImage(uri: Uri): OrderScreenshotRecognitionResult {
-        val bitmap = decodeScaledBitmap(uri, maxDimensionPx = 1600)
-            ?: throw IllegalStateException(
-                "Não foi possível abrir o arquivo selecionado. Escolha uma Nota de Corretagem em PDF ou um print válido (PNG/JPG)."
+    private suspend fun recognizeOrderImageBytes(
+        imageBytes: ByteArray,
+        detectedMime: String,
+        fileName: String
+    ): OrderScreenshotRecognitionResult {
+        val bitmap = decodeScaledBitmapFromBytes(imageBytes, maxDimensionPx = 1600)
+        val canUseDirectInline = bitmap == null &&
+            detectedMime.lowercase() in GEMINI_DIRECT_IMAGE_MIMES &&
+            imageBytes.size <= MAX_INLINE_BYTES
+
+        if (bitmap == null && !canUseDirectInline) {
+            throw IllegalStateException(
+                "Não foi possível decodificar a imagem \"$fileName\". Salve o arquivo como PDF, PNG ou JPG e tente novamente."
             )
+        }
+
+        val imageInstructions = """
+            Analise esta imagem (print de corretora/home broker ou foto de nota de corretagem) e extraia todas as ordens exibidas para lançamento na carteira.
+            Regras de leitura:
+            1. Defina `documentKind` como 'PRINT' (para tela de app/home broker), 'NOTA_B3' ou 'NOTA_BMF' (se for foto/print de nota SINACOR).
+            2. Identifique a corretora/conta no cabeçalho (ex.: "GENIAL - SWINGTRADE") em `brokerHeader`.
+            3. Em apps como Profit Mobile / Genial, o selo ao lado do ticker indica quantidade e lado:
+               - "5C" = quantity 5, side "COMPRA"
+               - "10C" = quantity 10, side "COMPRA"
+               - "10V" = quantity 10, side "VENDA"
+            4. Priorize `Preço Médio` (ou `Preço Exec.`) para `unitPrice`; use `Preço` apenas se `Preço Médio` não existir.
+            5. Use `Qtd Exec.` para `quantity` e `Total Exec` para `totalValue`.
+            6. Use `Fechamento`, `Data pregão` ou `Data` para `dateBr` (dd/MM/yyyy) e `Atualizado` ou `Hora` para `timeLabel`.
+            7. Leia o status (`Executada`, `Parcial`, `Aberta`, `Cancelada`, `Rejeitada`).
+            8. Se um cartão estiver parcialmente cortado ou sobreposto pela barra inferior (ex.: ticker e 10C visíveis, mas preço e data ocultos), registre o item com `isIncomplete = true`, `unitPrice = 0`, `totalValue = 0`, e explique em `notes` e `warnings`.
+            9. Se a imagem não contiver nenhuma ordem financeira, retorne `orders = []` e explique em `warnings`.
+        """.trimIndent()
 
         return try {
             val prompt = content {
-                image(bitmap)
-                text(
-                    """
-                    Analise esta imagem (print de corretora/home broker ou foto de nota de corretagem) e extraia todas as ordens exibidas para lançamento na carteira.
-                    Regras de leitura:
-                    1. Defina `documentKind` como 'PRINT' (para tela de app/home broker), 'NOTA_B3' ou 'NOTA_BMF' (se for foto/print de nota SINACOR).
-                    2. Identifique a corretora/conta no cabeçalho (ex.: "GENIAL - SWINGTRADE") em `brokerHeader`.
-                    3. Em apps como Profit Mobile / Genial, o selo ao lado do ticker indica quantidade e lado:
-                       - "5C" = quantity 5, side "COMPRA"
-                       - "10C" = quantity 10, side "COMPRA"
-                       - "10V" = quantity 10, side "VENDA"
-                    4. Priorize `Preço Médio` (ou `Preço Exec.`) para `unitPrice`; use `Preço` apenas se `Preço Médio` não existir.
-                    5. Use `Qtd Exec.` para `quantity` e `Total Exec` para `totalValue`.
-                    6. Use `Fechamento`, `Data pregão` ou `Data` para `dateBr` (dd/MM/yyyy) e `Atualizado` ou `Hora` para `timeLabel`.
-                    7. Leia o status (`Executada`, `Parcial`, `Aberta`, `Cancelada`, `Rejeitada`).
-                    8. Se um cartão estiver parcialmente cortado ou sobreposto pela barra inferior (ex.: ticker e 10C visíveis, mas preço e data ocultos), registre o item com `isIncomplete = true`, `unitPrice = 0`, `totalValue = 0`, e explique em `notes` e `warnings`.
-                    9. Se a imagem não contiver nenhuma ordem financeira, retorne `orders = []` e explique em `warnings`.
-                    """.trimIndent()
-                )
+                if (bitmap != null) {
+                    image(bitmap)
+                } else {
+                    inlineData(imageBytes, detectedMime.lowercase())
+                }
+                text(imageInstructions)
             }
 
             val response = withTimeout(IMAGE_TIMEOUT_MS) {
@@ -276,38 +517,102 @@ class OrderScreenshotRecognizer(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.e(TAG, "Falha ao interpretar print de ordens", e)
+            Log.e(TAG, "Falha ao interpretar print de ordens ($fileName)", e)
             throw e
         } finally {
-            if (!bitmap.isRecycled) {
+            if (bitmap != null && !bitmap.isRecycled) {
                 bitmap.recycle()
             }
         }
     }
 
-    private fun readBytesWithinLimit(uri: Uri, maxBytes: Int): ByteArray {
-        val stream = context.contentResolver.openInputStream(uri)
-            ?: throw IllegalStateException("Não foi possível abrir o PDF selecionado. Verifique se o arquivo ainda está disponível no dispositivo.")
-        stream.use { input ->
-            val buffer = ByteArray(16 * 1024)
-            val output = ByteArrayOutputStream()
-            var total = 0
-            while (true) {
-                val read = input.read(buffer)
-                if (read == -1) break
-                total += read
-                if (total > maxBytes) {
+    /**
+     * Abre o fluxo da URI usando múltiplos mecanismos compatíveis com provedores locais,
+     * Samsung My Files, Galeria, WhatsApp e arquivos virtuais (Google Drive / OneDrive).
+     */
+    private fun openUriInputStream(uri: Uri): InputStream? {
+        val cr = context.contentResolver
+
+        runCatching { cr.openInputStream(uri) }.getOrNull()?.let { return it }
+
+        runCatching { cr.openAssetFileDescriptor(uri, "r")?.createInputStream() }
+            .getOrNull()
+            ?.let { return it }
+
+        runCatching {
+            cr.openFileDescriptor(uri, "r")?.let { pfd ->
+                ParcelFileDescriptor.AutoCloseInputStream(pfd)
+            }
+        }.getOrNull()?.let { return it }
+
+        // Fallback para arquivos virtuais da nuvem (ex.: Google Drive / Docs)
+        val streamTypes = runCatching { cr.getStreamTypes(uri, "*/*") }.getOrNull().orEmpty()
+        val preferredTypes = buildList {
+            streamTypes.firstOrNull { it.contains("pdf", ignoreCase = true) }?.let { add(it) }
+            streamTypes.firstOrNull { it.startsWith("image/", ignoreCase = true) }?.let { add(it) }
+            add("application/pdf")
+            add("image/jpeg")
+            add("image/png")
+            add("image/*")
+        }.distinct()
+
+        for (mime in preferredTypes) {
+            runCatching {
+                cr.openTypedAssetFileDescriptor(uri, mime, null)?.createInputStream()
+            }.getOrNull()?.let { return it }
+        }
+
+        return null
+    }
+
+    private fun readPrefixBytes(input: InputStream, maxBytes: Int): ByteArray {
+        val output = ByteArrayOutputStream(minOf(maxBytes, 1024))
+        val buffer = ByteArray(512)
+        var total = 0
+        while (total < maxBytes) {
+            val toRead = minOf(buffer.size, maxBytes - total)
+            val read = input.read(buffer, 0, toRead)
+            if (read <= 0) break
+            output.write(buffer, 0, read)
+            total += read
+        }
+        return output.toByteArray()
+    }
+
+    private fun readBytesOnce(uri: Uri, maxBytes: Int): ByteArray {
+        val stream = openUriInputStream(uri)
+            ?: throw IllegalStateException(
+                "Não foi possível acessar o arquivo selecionado. Se estiver na nuvem (Google Drive/OneDrive), baixe o PDF ou imagem para o aparelho e tente novamente."
+            )
+        return try {
+            stream.use { input ->
+                val buffer = ByteArray(16 * 1024)
+                val output = ByteArrayOutputStream()
+                var total = 0
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read == -1) break
+                    total += read
+                    if (total > maxBytes) {
+                        throw IllegalStateException(
+                            "O arquivo selecionado excede o limite de ${maxBytes / (1024 * 1024)} MB. Selecione um arquivo menor ou divida o PDF por período."
+                        )
+                    }
+                    output.write(buffer, 0, read)
+                }
+                val bytes = output.toByteArray()
+                if (bytes.isEmpty()) {
                     throw IllegalStateException(
-                        "O PDF selecionado excede o limite de 18 MB suportado para leitura direta pela IA. Divida o arquivo por período e tente novamente."
+                        "O arquivo selecionado está vazio (0 bytes). Verifique se o download foi concluído e tente novamente."
                     )
                 }
-                output.write(buffer, 0, read)
+                bytes
             }
-            val bytes = output.toByteArray()
-            if (bytes.isEmpty()) {
-                throw IllegalStateException("O arquivo PDF selecionado está vazio.")
-            }
-            return bytes
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Permissão negada ao ler URI: $uri", e)
+            throw IllegalStateException(
+                "Permissão negada para ler o arquivo selecionado. Selecione o PDF ou imagem novamente a partir dos arquivos locais do aparelho."
+            )
         }
     }
 
@@ -326,29 +631,55 @@ class OrderScreenshotRecognizer(
         return uri.lastPathSegment.orEmpty()
     }
 
-    private fun decodeScaledBitmap(uri: Uri, maxDimensionPx: Int): Bitmap? {
-        val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        context.contentResolver.openInputStream(uri)?.use { stream ->
-            BitmapFactory.decodeStream(stream, null, boundsOpts)
-        } ?: return null
+    private fun decodeScaledBitmapFromBytes(bytes: ByteArray, maxDimensionPx: Int): Bitmap? {
+        val factoryDecoded = runCatching {
+            val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, boundsOpts)
+            val srcWidth = boundsOpts.outWidth
+            val srcHeight = boundsOpts.outHeight
+            if (srcWidth <= 0 || srcHeight <= 0) return@runCatching null
 
-        val srcWidth = boundsOpts.outWidth
-        val srcHeight = boundsOpts.outHeight
-        if (srcWidth <= 0 || srcHeight <= 0) return null
+            var sampleSize = 1
+            while ((srcWidth / sampleSize) > maxDimensionPx || (srcHeight / sampleSize) > maxDimensionPx) {
+                sampleSize *= 2
+            }
 
-        var sampleSize = 1
-        while ((srcWidth / sampleSize) > maxDimensionPx || (srcHeight / sampleSize) > maxDimensionPx) {
-            sampleSize *= 2
+            val decodeOpts = BitmapFactory.Options().apply {
+                inSampleSize = sampleSize
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+            val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts)
+                ?: return@runCatching null
+
+            scaleBitmapIfNeeded(decoded, maxDimensionPx)
+        }.getOrNull()
+
+        if (factoryDecoded != null) return factoryDecoded
+
+        // Fallback moderno (Android 9+): decodifica HEIC, HEIF, AVIF, WebP e capturas HDR Samsung
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            return runCatching {
+                val source = ImageDecoder.createSource(ByteBuffer.wrap(bytes))
+                ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+                    decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                    val srcW = info.size.width
+                    val srcH = info.size.height
+                    val longest = maxOf(srcW, srcH)
+                    if (longest > maxDimensionPx && longest > 0) {
+                        val scale = maxDimensionPx.toFloat() / longest.toFloat()
+                        decoder.setTargetSize(
+                            (srcW * scale).toInt().coerceAtLeast(1),
+                            (srcH * scale).toInt().coerceAtLeast(1)
+                        )
+                    }
+                }
+            }.getOrNull()
         }
 
-        val decodeOpts = BitmapFactory.Options().apply {
-            inSampleSize = sampleSize
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-        }
-        val decoded = context.contentResolver.openInputStream(uri)?.use { stream ->
-            BitmapFactory.decodeStream(stream, null, decodeOpts)
-        } ?: return null
+        return null
+    }
 
+    private fun scaleBitmapIfNeeded(decoded: Bitmap, maxDimensionPx: Int): Bitmap {
         val longest = maxOf(decoded.width, decoded.height)
         if (longest <= maxDimensionPx) return decoded
 
@@ -362,3 +693,4 @@ class OrderScreenshotRecognizer(
         return scaled
     }
 }
+

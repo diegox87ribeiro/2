@@ -1,7 +1,9 @@
 package com.example.ui.screens
 
+import android.content.Intent
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.filled.Edit
+import com.example.data.repository.OrderScreenshotRecognizer
 import com.example.domain.model.AssetDetailCalculator
 import com.example.domain.model.AssetDetailTab
 import com.example.ui.components.PremiumPortfolioAssetCard
@@ -142,7 +144,15 @@ fun PortfolioScreen(
     val orderDocumentPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
-        if (uri != null) onRecognizeOrderScreenshot(uri)
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            onRecognizeOrderScreenshot(uri)
+        }
     }
 
     val templateSaver = rememberLauncherForActivityResult(
@@ -302,7 +312,7 @@ fun PortfolioScreen(
                     Button(
                         onClick = {
                             orderDocumentPicker.launch(
-                                arrayOf("application/pdf", "image/*")
+                                OrderScreenshotRecognizer.PICKER_MIME_TYPES
                             )
                         },
                         enabled = orderScreenshotState !is OrderScreenshotRecognitionState.Analyzing,
@@ -712,7 +722,7 @@ fun PortfolioScreen(
             onDismiss = onDismissScreenshotReview,
             onPickAnotherImage = {
                 orderDocumentPicker.launch(
-                    arrayOf("application/pdf", "image/*")
+                    OrderScreenshotRecognizer.PICKER_MIME_TYPES
                 )
             },
             onConfirmLaunch = { orders, applyToPositions ->
