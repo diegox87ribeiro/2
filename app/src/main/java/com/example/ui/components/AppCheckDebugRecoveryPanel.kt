@@ -117,9 +117,9 @@ fun AppCheckDebugRecoveryPanel(
 
             OutlinedTextField(
                 value = tokenInput,
-                onValueChange = { tokenInput = it },
+                onValueChange = { tokenInput = it.replace("\n", "").replace("\r", "") },
                 label = { Text("Debug Token App Check (UUID)") },
-                singleLine = true,
+                maxLines = 2,
                 textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
                 modifier = Modifier
                     .fillMaxWidth()

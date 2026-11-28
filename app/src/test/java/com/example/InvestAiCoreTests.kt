@@ -1505,10 +1505,13 @@ class InvestAiCoreTests {
             )
         )
 
-        // 4. Detecção de erros relacionados ao Firebase App Check
+        // 4. Detecção de erros relacionados ao Firebase App Check e parse de TTL
         assertTrue(com.example.ai.isAppCheckRelatedError("Firebase App Check token is invalid."))
         assertTrue(com.example.ai.isAppCheckRelatedError("HTTP 403 App attestation failed"))
         assertFalse(com.example.ai.isAppCheckRelatedError("Tempo esgotado ao ler o PDF"))
+        assertEquals(3_600_000L, com.example.ai.parseAppCheckTtlMillis("3600s"))
+        assertEquals(1_800_500L, com.example.ai.parseAppCheckTtlMillis("1800.5s"))
+        assertEquals(3_600_000L, com.example.ai.parseAppCheckTtlMillis(null))
     }
 
     @Test
