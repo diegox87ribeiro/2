@@ -1473,61 +1473,42 @@ class InvestAiCoreTests {
     }
 
     @Test
-    fun `resolveAppCheckMode uses debug token on emulator harness and reCAPTCHA Enterprise on physical debug APK`() {
-        // 1. Emulador / Harness AI Studio com token injetado via Intent
+    fun `resolveAppCheckMode uses debug token in Debug builds and reCAPTCHA Enterprise in Release builds`() {
+        // 1. Emulador / Harness AI Studio (Debug com token injetado via Intent) -> DEBUG_TOKEN
         assertEquals(
-            com.example.ai.AppCheckProviderMode.DEBUG_HARNESS_TOKEN,
+            com.example.ai.AppCheckProviderMode.DEBUG_TOKEN,
             com.example.ai.resolveAppCheckMode(
                 isDebugBuild = true,
                 intentDebugToken = "12345678-aaaa-bbbb-cccc-1234567890ab",
-                hasSavedHarnessDebugToken = false,
                 recaptchaSiteKey = "6Lc2ZB0uAAAAAEFDwmkJPffRvbjNMf14qpKja0Wy"
             )
         )
 
-        // 2. Reabertura do emulador que já recebeu token via Intent anteriormente
+        // 2. APK Debug instalado manualmente em aparelho físico (sem token via Intent) -> DEBUG_TOKEN
+        // (reCAPTCHA Enterprise/Play Integrity recusam APKs debug sideloaded; Debug Token é obrigatório)
         assertEquals(
-            com.example.ai.AppCheckProviderMode.DEBUG_HARNESS_TOKEN,
+            com.example.ai.AppCheckProviderMode.DEBUG_TOKEN,
             com.example.ai.resolveAppCheckMode(
                 isDebugBuild = true,
                 intentDebugToken = null,
-                hasSavedHarnessDebugToken = true,
                 recaptchaSiteKey = "6Lc2ZB0uAAAAAEFDwmkJPffRvbjNMf14qpKja0Wy"
             )
         )
 
-        // 3. Smartphone físico instalando app-debug.apk sem token de depuração via Intent -> usa reCAPTCHA Enterprise
-        assertEquals(
-            com.example.ai.AppCheckProviderMode.RECAPTCHA_ENTERPRISE,
-            com.example.ai.resolveAppCheckMode(
-                isDebugBuild = true,
-                intentDebugToken = null,
-                hasSavedHarnessDebugToken = false,
-                recaptchaSiteKey = "6Lc2ZB0uAAAAAEFDwmkJPffRvbjNMf14qpKja0Wy"
-            )
-        )
-
-        // 4. Build Release -> sempre reCAPTCHA Enterprise
+        // 3. Build Release -> sempre RECAPTCHA_ENTERPRISE
         assertEquals(
             com.example.ai.AppCheckProviderMode.RECAPTCHA_ENTERPRISE,
             com.example.ai.resolveAppCheckMode(
                 isDebugBuild = false,
                 intentDebugToken = "ignored-in-release",
-                hasSavedHarnessDebugToken = true,
                 recaptchaSiteKey = "6Lc2ZB0uAAAAAEFDwmkJPffRvbjNMf14qpKja0Wy"
             )
         )
 
-        // 5. Debug local sem Intent token e sem recaptcha_site_key -> fallback DebugAppCheckProviderFactory
-        assertEquals(
-            com.example.ai.AppCheckProviderMode.DEBUG_FALLBACK,
-            com.example.ai.resolveAppCheckMode(
-                isDebugBuild = true,
-                intentDebugToken = null,
-                hasSavedHarnessDebugToken = false,
-                recaptchaSiteKey = null
-            )
-        )
+        // 4. Detecção de erros relacionados ao Firebase App Check
+        assertTrue(com.example.ai.isAppCheckRelatedError("Firebase App Check token is invalid."))
+        assertTrue(com.example.ai.isAppCheckRelatedError("HTTP 403 App attestation failed"))
+        assertFalse(com.example.ai.isAppCheckRelatedError("Tempo esgotado ao ler o PDF"))
     }
 
     @Test

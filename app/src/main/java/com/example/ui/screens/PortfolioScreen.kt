@@ -716,6 +716,9 @@ fun PortfolioScreen(
     }
 
     if (orderScreenshotState !is OrderScreenshotRecognitionState.Idle) {
+        val lastErrorUri = (orderScreenshotState as? OrderScreenshotRecognitionState.Error)
+            ?.lastImageUriString
+            ?.takeIf { it.isNotBlank() }
         OrderScreenshotReviewDialog(
             state = orderScreenshotState,
             targetPortfolioType = selectedType,
@@ -727,6 +730,9 @@ fun PortfolioScreen(
             },
             onConfirmLaunch = { orders, applyToPositions ->
                 onConfirmScreenshotOrders(selectedType, orders, applyToPositions)
+            },
+            onRetryLastFile = lastErrorUri?.let { uriStr ->
+                { onRecognizeOrderScreenshot(android.net.Uri.parse(uriStr)) }
             }
         )
     }

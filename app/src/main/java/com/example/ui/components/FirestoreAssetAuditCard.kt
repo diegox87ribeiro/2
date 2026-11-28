@@ -273,13 +273,9 @@ fun FirestoreAssetAuditCard(
                             style = MaterialTheme.typography.bodySmall,
                             color = TextPrimary
                         )
-                        if (activeAuditRunState.message.contains("app check", ignoreCase = true)) {
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = "Dica App Check: confirme que o app foi iniciado com token de depuração válido (ou build Release com reCAPTCHA Enterprise) e tente novamente.",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextSecondary
-                            )
+                        if (com.example.ai.isAppCheckRelatedError(activeAuditRunState.message)) {
+                            Spacer(Modifier.height(8.dp))
+                            AppCheckDebugRecoveryPanel()
                         }
                         Spacer(Modifier.height(6.dp))
                         TextButton(

@@ -1838,6 +1838,36 @@ class ConsolidatedReportsRobolectricTest {
         org.junit.Assert.assertEquals(com.example.data.repository.BrokerageDocumentKind.IMAGE, loadedImg.kind)
         org.junit.Assert.assertEquals("image/heic", loadedImg.mimeType)
     }
+
+    @Test
+    fun `OrderScreenshotReviewDialog renders AppCheckDebugRecoveryPanel and retry same file on App Check error`() {
+        var retriedSameFile = false
+        val errorState = com.example.domain.model.OrderScreenshotRecognitionState.Error(
+            message = "Firebase App Check token is invalid.",
+            lastImageUriString = "content://com.example.test/nota.pdf"
+        )
+
+        composeRule.setContent {
+            InvestAiTheme {
+                com.example.ui.screens.OrderScreenshotReviewDialog(
+                    state = errorState,
+                    targetPortfolioType = com.example.domain.model.PortfolioType.REAL,
+                    onDismiss = {},
+                    onPickAnotherImage = {},
+                    onConfirmLaunch = { _, _ -> },
+                    onRetryLastFile = { retriedSameFile = true }
+                )
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("appcheck_debug_recovery_panel").assertIsDisplayed()
+        composeRule.onNodeWithTag("appcheck_debug_token_input").assertIsDisplayed()
+        composeRule.onNodeWithTag("appcheck_copy_token_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("appcheck_validate_token_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("retry_same_order_file_button").performClick()
+        org.junit.Assert.assertTrue(retriedSameFile)
+    }
 }
 
 

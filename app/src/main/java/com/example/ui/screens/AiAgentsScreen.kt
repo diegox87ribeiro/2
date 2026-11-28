@@ -499,6 +499,14 @@ fun AiAgentsScreen(
                             Text("Falha na Consulta ao Agente Gemini", style = MaterialTheme.typography.titleSmall, color = CoralRed)
                             Spacer(Modifier.height(4.dp))
                             Text(ui.message, style = MaterialTheme.typography.bodySmall)
+                            if (com.example.ai.isAppCheckRelatedError(ui.message)) {
+                                Spacer(Modifier.height(10.dp))
+                                com.example.ui.components.AppCheckDebugRecoveryPanel(
+                                    onTokenValidated = {
+                                        aiAgentsViewModel.submitStructuredAnalysis(selectedAsset, state.realHhi, consentGranted)
+                                    }
+                                )
+                            }
                             Spacer(Modifier.height(8.dp))
                             OutlinedButton(onClick = {
                                 aiAgentsViewModel.submitStructuredAnalysis(selectedAsset, state.realHhi, consentGranted)

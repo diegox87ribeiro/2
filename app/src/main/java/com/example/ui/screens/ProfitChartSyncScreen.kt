@@ -524,6 +524,9 @@ fun ProfitChartSyncScreen(
     }
 
     if (orderScreenshotState !is OrderScreenshotRecognitionState.Idle) {
+        val lastErrorUri = (orderScreenshotState as? OrderScreenshotRecognitionState.Error)
+            ?.lastImageUriString
+            ?.takeIf { it.isNotBlank() }
         OrderScreenshotReviewDialog(
             state = orderScreenshotState,
             targetPortfolioType = PortfolioType.REAL,
@@ -535,6 +538,9 @@ fun ProfitChartSyncScreen(
             },
             onConfirmLaunch = { orders, applyPositions ->
                 onConfirmScreenshotOrders(PortfolioType.REAL, orders, applyPositions)
+            },
+            onRetryLastFile = lastErrorUri?.let { uriStr ->
+                { onRecognizeOrderScreenshot(android.net.Uri.parse(uriStr)) }
             }
         )
     }

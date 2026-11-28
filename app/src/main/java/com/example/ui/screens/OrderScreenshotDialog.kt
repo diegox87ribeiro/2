@@ -59,11 +59,14 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.material.icons.filled.Refresh
+import com.example.ai.isAppCheckRelatedError
 import com.example.domain.model.B3BrokerageSpecMapper
 import com.example.domain.model.OperationType
 import com.example.domain.model.OrderScreenshotRecognitionState
 import com.example.domain.model.PortfolioType
 import com.example.domain.model.RecognizedOrderDraft
+import com.example.ui.components.AppCheckDebugRecoveryPanel
 import com.example.ui.components.formatBrl
 import com.example.ui.theme.AmberGold
 import com.example.ui.theme.CardElevated
@@ -179,7 +182,8 @@ fun OrderScreenshotReviewDialog(
     targetPortfolioType: PortfolioType,
     onDismiss: () -> Unit,
     onPickAnotherImage: () -> Unit,
-    onConfirmLaunch: (orders: List<RecognizedOrderDraft>, applyToPositions: Boolean) -> Unit
+    onConfirmLaunch: (orders: List<RecognizedOrderDraft>, applyToPositions: Boolean) -> Unit,
+    onRetryLastFile: (() -> Unit)? = null
 ) {
     if (state is OrderScreenshotRecognitionState.Idle) return
 
@@ -207,6 +211,7 @@ fun OrderScreenshotReviewDialog(
                     ErrorScreenshotContent(
                         message = state.message,
                         onPickAnotherImage = onPickAnotherImage,
+                        onRetryLastFile = if (!state.lastImageUriString.isNullOrBlank()) onRetryLastFile else null,
                         onDismiss = onDismiss
                     )
                 }
@@ -258,11 +263,13 @@ private fun AnalyzingScreenshotContent(statusLabel: String) {
 private fun ErrorScreenshotContent(
     message: String,
     onPickAnotherImage: () -> Unit,
+    onRetryLastFile: (() -> Unit)?,
     onDismiss: () -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -291,6 +298,28 @@ private fun ErrorScreenshotContent(
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(12.dp)
             )
+        }
+        if (isAppCheckRelatedError(message)) {
+            AppCheckDebugRecoveryPanel(
+                onTokenValidated = onRetryLastFile
+            )
+        }
+        if (onRetryLastFile != null) {
+            Button(
+                onClick = onRetryLastFile,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = ElectricCyan,
+                    contentColor = EmeraldOnPrimary
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .testTag("retry_same_order_file_button")
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Tentar Novamente Mesmo Arquivo")
+            }
         }
         Row(
             modifier = Modifier.fillMaxWidth(),
